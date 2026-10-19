@@ -1,6 +1,9 @@
 # stats-bee
 
-stats-bee checks the values of an anemoi dataset on a seeded sample of dates:
+stats-bee checks an anemoi dataset against itself. On a seeded sample of dates, it reduces every
+field to summary statistics (mean, stdev, min, max, NaN count). It then compares those with the
+dataset's stored statistics, physical ranges and a reference stats file. It never reads the
+original source data: comparing grid-point values with the source is spot-bee's job.
 
 | check | what | severity |
 |---|---|---|
