@@ -2,6 +2,7 @@
 import json
 
 import numpy as np
+import pytest
 import zarr
 
 from varda_hive.cli import stats_bee_main
@@ -19,10 +20,12 @@ def _severities(comparison):
     return [f.severity for f in comparison.findings]
 
 
-def test_round_trip_is_exact(dataset_path, tmp_path):
+@pytest.mark.parametrize("name", ["s.json", "s.yaml"])
+def test_round_trip_is_exact(dataset_path, tmp_path, name):
     stats = _dump(dataset_path, n_dates=3, include_dates=[7])
-    save_stats(stats, tmp_path / "s.json")
-    assert load_stats(tmp_path / "s.json") == stats
+    stats["stored"]["T_2M"]["mean"] = 1e-17  # tiny floats too
+    save_stats(stats, tmp_path / name)
+    assert load_stats(tmp_path / name) == stats
     assert len(stats["dates"]) in (3, 4) and stats["dates"][-1] == "2020-03-01T07:00:00"
 
 
@@ -33,6 +36,15 @@ def test_full_pass_recomputes_stored_statistics(dataset_path):
         assert rec["exact"] and rec["se_mean"] == 0
         for s in ("mean", "stdev", "minimum", "maximum"):
             assert np.isclose(rec[s], stored[s], rtol=1e-6, atol=1e-6), (name, s)
+
+
+def test_yaml_and_json_compare_identical(dataset_path, tmp_path):
+    stats = _dump(dataset_path, n_dates=4)
+    save_stats(stats, tmp_path / "s.yaml")
+    save_stats(stats, tmp_path / "s.json")
+    assert "per_date:" in (tmp_path / "s.yaml").read_text()
+    comparison = compare_stats(load_stats(tmp_path / "s.yaml"), load_stats(tmp_path / "s.json"))
+    assert _severities(comparison) == [Severity.INFO]
 
 
 def test_compare_identical(dataset_path):
@@ -95,7 +107,7 @@ def test_sampled_test_has_no_false_errors(tmp_path):
 
 
 def test_cli(dataset_path, tmp_path, capsys):
-    ref, new = tmp_path / "ref.json", tmp_path / "new.json"
+    ref, new = tmp_path / "ref.yaml", tmp_path / "new.json"
     assert stats_bee_main(["dump", str(dataset_path), "-o", str(ref)]) == 0
     assert stats_bee_main(["dump", str(dataset_path), "--dates-from", str(ref), "-o", str(new)]) == 0
     assert stats_bee_main(["compare", str(new), str(ref)]) == 0

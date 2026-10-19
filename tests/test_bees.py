@@ -58,7 +58,11 @@ def test_cli(dataset_path, write_spec, capsys):
     assert meta_bee_main([str(dataset_path), "--spec", str(spec)]) == 1
     assert "variable not in spec" in capsys.readouterr().out
     assert hive_main([str(dataset_path), "--format", "json"]) == 0
+    capsys.readouterr()
     assert hive_main(["--list"]) == 0
+    listing = capsys.readouterr().out.splitlines()
+    assert [line.split()[0] for line in listing if not line.startswith(" ")] == ["meta-bee", "stats-bee", "spot-bee"]
+    assert "  no_nans " in "\n".join(listing)
 
 
 def _stats_findings(path, spec, select, severity=Severity.ERROR):

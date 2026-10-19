@@ -16,7 +16,7 @@ constant_fields: [FIS, FR_LAND]
 # stats-bee: physical ranges per variable (path relative to this file)
 ranges_file: physical_ranges.example.yaml
 # stats-bee: stats file to compare against (written by `stats-bee dump`, committed next to this spec)
-reference_stats: varda-tiny.stats.json
+reference_stats: varda-tiny.stats.yaml
 
 # Seeded sampling used by stats-bee and spot-bee
 sampling:

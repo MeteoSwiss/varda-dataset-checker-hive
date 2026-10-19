@@ -1,5 +1,5 @@
-"""Stats files: a small JSON fingerprint of a dataset's values, written by
-`stats-bee dump` and compared by `stats-bee compare`.
+"""Stats files: a small YAML or JSON fingerprint of a dataset's values (the format follows
+the file extension), written by `stats-bee dump` and compared by `stats-bee compare`.
 
 A stats file holds, for a seeded sample of dates:
 - `stored`: the statistics stored in the dataset (mean, stdev, minimum, maximum)
@@ -9,7 +9,7 @@ A stats file holds, for a seeded sample of dates:
 
 Two stats files built on the same dates (see `--dates-from`) compare cell by cell, without
 any statistics: a value is identical, close (within `compare_atol_stdev` * stdev) or differs.
-Floats are written with `repr`, which round-trips exactly, and NaN as null.
+Both formats write floats with `repr`, which round-trips exactly, and NaN as null.
 """
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -20,6 +20,7 @@ from typing import Any
 import warnings
 
 import numpy as np
+import yaml
 
 from .. import __version__
 from .dataset import STATISTICS, Dataset
@@ -149,9 +150,20 @@ def _num(x, kind=float):
     return None if math.isnan(x) else kind(x)
 
 
+YAML_SUFFIXES = (".yaml", ".yml")
+_Dumper = getattr(yaml, "CSafeDumper", yaml.SafeDumper)
+_Loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+
 def save_stats(stats: dict, path: str | Path | None) -> None:
-    """Write to `path`, or to stdout if it is None or "-"."""
-    text = json.dumps(stats, indent=1) + "\n"
+    """Write YAML to a `.yaml`/`.yml` path, JSON to any other path, JSON to stdout if it is None or "-".
+
+    YAML: dicts in block style, every per-date list on one line, so a diff shows which variable
+    and statistic changed."""
+    if path not in (None, "-") and Path(path).suffix in YAML_SUFFIXES:
+        text = yaml.dump(stats, Dumper=_Dumper, sort_keys=False, default_flow_style=None, width=120)
+    else:
+        text = json.dumps(stats, indent=1) + "\n"
     if path in (None, "-"):
         print(text, end="")
     else:
@@ -159,7 +171,8 @@ def save_stats(stats: dict, path: str | Path | None) -> None:
 
 
 def load_stats(path: str | Path) -> dict:
-    stats = json.loads(Path(path).read_text())
+    text = Path(path).read_text()
+    stats = yaml.load(text, Loader=_Loader) if Path(path).suffix in YAML_SUFFIXES else json.loads(text)
     if stats.get("format") != FORMAT:
         raise ValueError(f"{path}: not a stats file of format {FORMAT!r}")
     return stats
