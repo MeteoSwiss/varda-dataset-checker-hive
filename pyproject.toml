@@ -1,0 +1,34 @@
+[project]
+name = "varda-dataset-checker-hive"
+version = "0.1.0"
+description = "A hive of slim bees that check anemoi datasets for faults: metadata, statistics and spot-checks against the source."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy",
+    "pydantic>=2",
+    "pyyaml",
+    "zarr>=2.18,<3",
+]
+
+[project.optional-dependencies]
+anemoi = ["anemoi-datasets>=0.5.42"]
+
+[project.scripts]
+hive = "varda_hive.cli:hive_main"
+meta-bee = "varda_hive.cli:meta_bee_main"
+stats-bee = "varda_hive.cli:stats_bee_main"
+spot-bee = "varda_hive.cli:spot_bee_main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/varda_hive"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
