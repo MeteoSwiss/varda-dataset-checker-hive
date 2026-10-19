@@ -7,4 +7,4 @@ U_10M:       {min: -80.0, max: 80.0, units: m s-1}
 V_10M:       {min: -80.0, max: 80.0, units: m s-1}
 PS:          {min: 50000.0, max: 110000.0, units: Pa}
 TOT_PREC_1H: {min: 0.0, max: 0.3, units: m}
-CLCT:        {min: 0.0, max: 100.0, units: "%"}
+CLCT:        {min: 0.0, max: 105.0, units: "%"}   # ICON slightly exceeds 100 (103 on varda-tiny)

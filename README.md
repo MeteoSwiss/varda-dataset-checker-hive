@@ -5,9 +5,11 @@ A hive of slim tools ("bees") that check anemoi datasets for faults. Each bee co
 | command | layer | reads |
 |---|---|---|
 | `meta-bee` | metadata and structure: variables, dates, frequency, grid, reference diff | `.zattrs` and small arrays only |
-| `stats-bee` | values: NaNs, constant fields, physical ranges, stored vs recomputed statistics | sampled time steps |
+| `stats-bee` | values: NaNs, constant fields, physical ranges, stored vs recomputed statistics, reference stats file | sampled time steps |
 | `spot-bee` | sampled (time, variable, grid points) vs the original source | sampled time steps + source |
 | `hive` | runs all bees and merges their findings | |
+| `stats-bee dump` | writes a stats file (see below) | sampled time steps |
+| `stats-bee compare` | compares two stats files: what is identical, what differs | two stats files |
 
 All of them share the same core, the `honeycomb`:
 - dataset access
@@ -17,8 +19,8 @@ All of them share the same core, the `honeycomb`:
 - seeded sampling
 - the `Source` interface
 
-> Status: **skeleton**. Each bee has one template check (`variables_match_spec`, `no_nans`,
-> `matches_source`). The real checks come next.
+> Status: the stats-bee is implemented; meta-bee and spot-bee still have one template check each
+> (`variables_match_spec`, `matches_source`).
 
 ## Usage
 
@@ -31,6 +33,41 @@ uv run hive <dataset.zarr> --spec <spec.yaml> --format json --fail-on warning
 ```
 
 Exit code is 0 when no finding reaches `--fail-on` (default `error`), and 1 otherwise.
+
+## Stats files
+
+A stats file is a small JSON fingerprint of a dataset's values. For a seeded sample of dates it
+holds the stored statistics, the mean/stdev/min/max/NaN count of every variable at every sampled
+date, and the statistics recomputed from the sample with their sampling errors.
+
+```bash
+uv run stats-bee dump <dataset.zarr> --spec <spec.yaml> -o checks/<dataset>.stats.json   # once, commit it
+uv run stats-bee dump <dataset.zarr> --spec <spec.yaml> --dates-from checks/<dataset>.stats.json -o new.json
+uv run stats-bee compare new.json checks/<dataset>.stats.json    # exit 1 if anything differs
+```
+
+`--dates-from` samples exactly the reference's dates, so the comparison is cell by cell and
+needs no statistics: each value is *identical* (bitwise), *close* (within
+`compare_atol_stdev` x stdev, default 0) or *differs*. With `reference_stats` in the spec, the
+stats-bee runs the same comparison as its `matches_reference_stats` check.
+
+### How the tolerances work
+
+- **Stored vs recomputed statistics** (`statistics_consistent`). The dates are the sampling unit,
+  drawn stratified over the statistics window.
+  - **ERROR**: the mean is off by more than `z_threshold` x a distribution-free bound on its
+    sampling error (stdev x sqrt(1 - n/N) / sqrt(n)), so this never fires by chance.
+  - **WARNING**: the mean or stdev is off by more than `z_threshold` x the standard error
+    estimated from the sample itself (analytic for the mean, bootstrap for the stdev). These
+    estimates are tighter but can be fooled, e.g. by a sample of mostly night-time dates for
+    insolation.
+  - **Minimum and maximum** can only be bounded by a sample.
+  - **Full pass**: with `n_dates: all` everything is exact up to `statistics_rtol`, and even a
+    0.1 % change of a mean is an ERROR.
+  - The INFO finding lists the smallest detectable difference per variable.
+- **Single-step faults** are only seen when their date is sampled. Add the dates you care about
+  to `include_dates`, or use `n_dates: all` when a full pass is affordable.
+- A field rolled in space keeps all its summaries: that is spot-bee territory.
 
 ## Findings, not assertions
 
@@ -78,4 +115,5 @@ clean synthetic dataset and fires on a broken one, as in `tests/test_bees.py`.
 
 ```bash
 uv sync && uv run pytest
+uv run pytest -m faulty    # stats-bee on Varda-tiny and its faulty variants (needs /scratch)
 ```

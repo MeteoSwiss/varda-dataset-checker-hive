@@ -7,7 +7,7 @@ unset field skip themselves with an INFO finding.
 """
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 import yaml
@@ -20,14 +20,21 @@ class _Strict(BaseModel):
 
 class Sampling(_Strict):
     seed: int = 0
-    n_dates: int = 5
+    # Random time indices, or "all" for a full pass (exact statistics, but reads every step).
+    n_dates: int | Literal["all"] = 5
     n_points: int = 1000
     # Time indices always included in the sample, in addition to the random ones.
     include_dates: list[int] = Field(default_factory=list)
 
 
 class Tolerances(_Strict):
-    statistics_rtol: float = 1e-3
+    # Recomputed vs stored statistics: allowed |diff| = z_threshold * SE + statistics_rtol * (|stored| + stdev),
+    # where SE is the sampling error of the recomputed value (0 for a full pass).
+    statistics_rtol: float = 1e-5
+    z_threshold: float = 5.0
+    # Stats file vs reference stats file: |diff| <= compare_atol_stdev * stdev of the variable is
+    # reported as "close" instead of "differs". 0 means only bitwise identical values pass.
+    compare_atol_stdev: float = 0.0
     source_rtol: float = 1e-4
     source_atol: float = 1e-4
 
@@ -47,6 +54,8 @@ class Spec(_Strict):
     grid_points: int | None = None
     constant_fields: list[str] | None = None
     ranges_file: Path | None = None
+    # Stats file (written by `stats-bee dump`) to compare against, e.g. committed in the dataset repo.
+    reference_stats: Path | None = None
     sampling: Sampling = Field(default_factory=Sampling)
     tolerances: Tolerances = Field(default_factory=Tolerances)
     source: SourceSpec | None = None
@@ -60,6 +69,8 @@ def load_spec(path: str | Path | None) -> Spec:
     path = Path(path)
     raw = yaml.safe_load(path.read_text()) or {}
     spec = Spec(**raw, base_dir=path.resolve().parent)
-    if spec.ranges_file is not None and not spec.ranges_file.is_absolute():
-        spec.ranges_file = spec.base_dir / spec.ranges_file
+    for key in ("ranges_file", "reference_stats"):
+        value = getattr(spec, key)
+        if value is not None and not value.is_absolute():
+            setattr(spec, key, spec.base_dir / value)
     return spec

@@ -32,3 +32,5 @@ packages = ["src/varda_hive"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not faulty'"
+markers = ["faulty: runs on the Varda-tiny faulty datasets on /scratch (skipped when missing)"]
