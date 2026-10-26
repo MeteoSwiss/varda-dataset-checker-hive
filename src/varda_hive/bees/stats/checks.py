@@ -22,7 +22,11 @@ def _stats(ctx: CheckContext) -> dict:
 
 @check("stats")
 def statistics_consistent(ctx: CheckContext):
-    """Stored mean/stdev/min/max agree with the ones recomputed from the sampled dates."""
+    """Stored mean/stdev/min/max are self-consistent and match the sampled dates within the sampling error.
+
+    Self-consistent: no NaN, min <= mean <= max, stdev 0 exactly when min == max. A sample can
+    only bound min/max; with `n_dates: all` everything is compared exactly.
+    """
     stats, tol = _stats(ctx), ctx.spec.tolerances
     for name in stats["variables"]:
         stored, rec = stats["stored"][name], stats["recomputed"][name]
@@ -86,7 +90,10 @@ def _resolution(stats: dict, z: float) -> dict:
 
 @check("stats")
 def physical_ranges(ctx: CheckContext):
-    """Values on the sampled dates and the stored minimum/maximum lie inside the physical ranges."""
+    """Sampled values and stored min/max lie inside the ranges of the spec's `ranges_file`.
+
+    Skipped without a `ranges_file`; variables not in it are listed as INFO.
+    """
     if ctx.spec.ranges_file is None:
         yield info("skipped: no `ranges_file` in spec")
         return
@@ -112,7 +119,7 @@ def physical_ranges(ctx: CheckContext):
 
 @check("stats")
 def no_nans(ctx: CheckContext):
-    """No NaNs on the sampled dates when the dataset says allow_nans: false."""
+    """No NaNs on the sampled dates, unless the dataset sets `allow_nans`."""
     if ctx.dataset.attrs.get("allow_nans", False):
         yield info("skipped: dataset allows NaNs")
         return
@@ -125,7 +132,12 @@ def no_nans(ctx: CheckContext):
 
 @check("stats")
 def constant_fields(ctx: CheckContext):
-    """Fields listed as constant don't change; others aren't constant in time or space."""
+    """Fields in `constant_fields` never change; no other field is constant in time or uniform in space.
+
+    `constant_fields` comes from the dataset, or from the spec if the dataset has none. A field in
+    it that changes is an ERROR; any other field identical on all sampled dates, or uniform in
+    space on one date, is a WARNING. Computed forcings are exempt from the uniform-in-space test.
+    """
     stats = _stats(ctx)
     listed = ctx.dataset.attrs.get("constant_fields")
     if listed is None:
@@ -154,7 +166,10 @@ def constant_fields(ctx: CheckContext):
 
 @check("stats")
 def matches_reference_stats(ctx: CheckContext):
-    """Values on the sampled dates and the stored statistics match the reference stats file."""
+    """Stored statistics and per-date values match the spec's `reference_stats`, on its dates.
+
+    Skipped without `reference_stats`. Same comparison as `stats-bee compare`.
+    """
     if ctx.spec.reference_stats is None:
         yield info("skipped: no `reference_stats` in spec")
         return

@@ -11,11 +11,11 @@ comparing grid-point values with the source is spot-bee's job.
 
 | check | what | severity |
 |---|---|---|
-| `statistics_consistent` | stored mean/stdev/min/max vs the ones recomputed from the sampled dates | ERROR / WARNING, see [tolerances](#how-the-tolerances-work) |
-| `physical_ranges` | per-date and stored min/max inside the ranges of `ranges_file` | ERROR |
-| `no_nans` | no NaNs when the dataset says `allow_nans: false` | ERROR |
-| `constant_fields` | fields in `constant_fields` don't change between dates (ERROR); other fields aren't identical on all dates or uniform in space (WARNING) | ERROR / WARNING |
-| `matches_reference_stats` | the sampled dates match `reference_stats`, see [stats files](#stats-files) | ERROR / WARNING |
+| `statistics_consistent` | stored mean/stdev/min/max are self-consistent (no NaN, min <= mean <= max, stdev 0 exactly when min == max) and match the ones recomputed from the sampled dates | ERROR / WARNING, see [tolerances](#how-the-tolerances-work) |
+| `physical_ranges` | per-date and stored min/max inside the ranges of the spec's `ranges_file` | ERROR |
+| `no_nans` | no NaNs on the sampled dates, unless the dataset sets `allow_nans` | ERROR |
+| `constant_fields` | fields in `constant_fields` don't change between dates (ERROR); other fields aren't identical on all dates, or uniform in space on one date (WARNING, computed forcings exempt) | ERROR / WARNING |
+| `matches_reference_stats` | stored statistics and per-date values match the spec's `reference_stats`, on the reference's dates, see [stats files](#stats-files) | ERROR / WARNING |
 
 ```bash
 uv run stats-bee check <dataset.zarr> --spec <spec.yaml>            # run the checks
