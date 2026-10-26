@@ -1,12 +1,12 @@
-"""Command-line entry points: `hive` runs all bees, `meta-bee`,
-`stats-bee` and `spot-bee` run one each. All share the same options.
-`stats-bee dump` writes a stats file and `stats-bee compare` compares two of them
-(dispatched on the first argument, so a dataset path called `dump` must be written `./dump`).
+"""Command-line entry points:
+- `hive <dataset>` runs all bees
+- `meta-bee check`, `stats-bee check` and `spot-bee check` run one bee each, with the same options
+- `stats-bee dump` writes a stats file and `stats-bee compare` compares two of them
 
 Exit code: 0 if no finding reaches --fail-on (default: error), 1 otherwise,
 2 on usage errors.
 """
-from argparse import ArgumentParser, RawDescriptionHelpFormatter
+from argparse import ArgumentParser, Namespace, RawDescriptionHelpFormatter
 import sys
 
 from .honeycomb import BEES, CheckContext, Dataset, Severity, checks_for, load_spec, run
@@ -22,8 +22,7 @@ BEE_DESCRIPTIONS = {
 }
 
 
-def _parser(prog: str, description: str, with_bees: bool) -> ArgumentParser:
-    p = ArgumentParser(prog=prog, description=description)
+def _add_check_args(p: ArgumentParser, with_bees: bool) -> None:
     p.add_argument("dataset", nargs="?", help="path to the anemoi zarr dataset")
     p.add_argument("--spec", help="dataset spec YAML (see templates/spec.example.yaml)")
     p.add_argument("--reference", help="reference dataset, for checks that compare against one")
@@ -34,13 +33,9 @@ def _parser(prog: str, description: str, with_bees: bool) -> ArgumentParser:
     p.add_argument("--list", action="store_true", help="list the bees and their checks and exit")
     if with_bees:
         p.add_argument("--bees", nargs="+", choices=BEES, default=list(BEES))
-    return p
 
 
-def _main(bees: list[str] | None, prog: str, description: str, argv=None) -> int:
-    args = _parser(prog, description, with_bees=bees is None).parse_args(argv)
-    bees = bees or args.bees
-
+def _run_checks(args: Namespace, bees: list[str], prog: str) -> int:
     if args.list:
         width = max(len(c.name) for bee in bees for c in checks_for(bee))
         for bee in bees:
@@ -66,54 +61,75 @@ def _main(bees: list[str] | None, prog: str, description: str, argv=None) -> int
 
 
 def hive_main(argv=None) -> int:
-    return _main(None, "hive", "Run all bees on an anemoi dataset.", argv)
+    p = ArgumentParser(prog="hive", description="Run all bees on an anemoi dataset.")
+    _add_check_args(p, with_bees=True)
+    args = p.parse_args(argv)
+    return _run_checks(args, args.bees, "hive")
+
+
+def _bee_main(bee: str, description: str, argv, extra=()) -> int:
+    """A bee's command: `check` plus the bee's `extra` subcommands, given as
+    (name, help, add_args, handler) with handler(args) -> exit code."""
+    prog = f"{bee}-bee"
+    p = ArgumentParser(prog=prog, description=description)
+    commands = p.add_subparsers(dest="command", required=True, metavar="COMMAND")
+    check = commands.add_parser("check", help=f"run the {prog} checks on a dataset",
+                                description=f"Run the {prog} checks on an anemoi dataset.")
+    _add_check_args(check, with_bees=False)
+    check.set_defaults(func=lambda args: _run_checks(args, [bee], f"{prog} check"))
+    for name, help, add_args, handler in extra:
+        sub = commands.add_parser(name, help=help, formatter_class=RawDescriptionHelpFormatter)
+        add_args(sub)
+        sub.set_defaults(func=handler)
+    args = p.parse_args(argv)
+    return args.func(args)
 
 
 def meta_bee_main(argv=None) -> int:
-    return _main(["meta"], "meta-bee", "Check metadata and structure of an anemoi dataset.", argv)
+    return _bee_main("meta", "Check metadata and structure of an anemoi dataset.", argv)
 
 
 def stats_bee_main(argv=None) -> int:
-    argv = sys.argv[1:] if argv is None else list(argv)
-    subcommands = {"dump": _stats_dump, "compare": _stats_compare}
-    if argv and argv[0] in subcommands:
-        return subcommands[argv[0]](argv[1:])
-    return _main(["stats"], "stats-bee", "Check values and statistics of an anemoi dataset. "
-                 "Subcommands: `stats-bee dump` writes a stats file, `stats-bee compare` compares two "
-                 "(see `stats-bee dump --help`).", argv)
+    return _bee_main("stats", "Check values and statistics of an anemoi dataset, and write and compare "
+                     "stats files. See docs/stats-bee.md.", argv, extra=[
+                         ("dump", "write the stats file of a dataset", _add_dump_args, _dump),
+                         ("compare", "compare a stats file with a reference stats file", _add_compare_args, _compare),
+                     ])
 
 
 def spot_bee_main(argv=None) -> int:
-    return _main(["spot"], "spot-bee", "Spot-check an anemoi dataset against its source.", argv)
+    return _bee_main("spot", "Spot-check an anemoi dataset against its source.", argv)
 
 
-def _stats_dump(argv) -> int:
-    p = ArgumentParser(prog="stats-bee dump", description="Write the stats file of an anemoi dataset: stored "
-                       "statistics, per-date summaries and recomputed statistics on the sampled dates.",
-                       formatter_class=RawDescriptionHelpFormatter, epilog="""examples:
+def _add_dump_args(p: ArgumentParser) -> None:
+    p.description = ("Write the stats file of an anemoi dataset: stored statistics, per-date summaries "
+                     "and recomputed statistics on the sampled dates.")
+    p.epilog = """examples:
   stats-bee dump data.zarr --spec spec.yaml -o checks/data.stats.yaml        # reference, commit it
   stats-bee dump new.zarr --spec spec.yaml --dates-from checks/data.stats.yaml -o new.stats.yaml
 
-See docs/stats-bee.md for the file layout and how the tolerances work.""")
+See docs/stats-bee.md for the file layout and how the tolerances work."""
     p.add_argument("dataset", help="path to the anemoi zarr dataset")
     p.add_argument("--spec", help="dataset spec YAML (sampling settings)")
     p.add_argument("--dates-from", metavar="STATS", help="use the dates of this stats file (e.g. the reference)")
     p.add_argument("-o", "--output", default="-", help="output file, YAML for .yaml/.yml, otherwise JSON (default: JSON to stdout)")
-    args = p.parse_args(argv)
+
+
+def _dump(args: Namespace) -> int:
     dates_from = load_stats(args.dates_from) if args.dates_from else None
     save_stats(compute_stats(Dataset(args.dataset), load_spec(args.spec), dates_from), args.output)
     return 0
 
 
-def _stats_compare(argv) -> int:
-    p = ArgumentParser(prog="stats-bee compare", description="Compare a stats file with a reference stats file "
-                       "and show what is identical and what differs. Exit code 1 if anything differs.",
-                       formatter_class=RawDescriptionHelpFormatter, epilog="""examples:
+def _add_compare_args(p: ArgumentParser) -> None:
+    p.description = ("Compare a stats file with a reference stats file and show what is identical and what "
+                     "differs. Exit code 1 if anything differs.")
+    p.epilog = """examples:
   stats-bee compare new.stats.yaml checks/data.stats.yaml
   stats-bee compare new.stats.yaml checks/data.stats.yaml --atol-stdev 1e-6 --all
 
 Values are identical (bitwise), close (|diff| <= atol-stdev * stdev of the variable) or differ.
-See docs/stats-bee.md.""")
+See docs/stats-bee.md."""
     p.add_argument("stats", help="stats file to check")
     p.add_argument("reference", help="reference stats file")
     p.add_argument("--spec", help="dataset spec YAML (tolerances.compare_atol_stdev)")
@@ -121,7 +137,9 @@ See docs/stats-bee.md.""")
     p.add_argument("--format", choices=("text", "json"), default="text")
     p.add_argument("--fail-on", choices=("error", "warning"), default="error")
     p.add_argument("--all", action="store_true", help="text output: list identical variables too")
-    args = p.parse_args(argv)
+
+
+def _compare(args: Namespace) -> int:
     stats, reference = load_stats(args.stats), load_stats(args.reference)
     atol = args.atol_stdev if args.atol_stdev is not None else load_spec(args.spec).tolerances.compare_atol_stdev
     comparison = compare_stats(stats, reference, atol)

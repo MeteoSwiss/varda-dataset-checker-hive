@@ -1,9 +1,13 @@
 # stats-bee
 
-stats-bee checks an anemoi dataset against itself. On a seeded sample of dates, it reduces every
-field to summary statistics (mean, stdev, min, max, NaN count). It then compares those with the
-dataset's stored statistics, physical ranges and a reference stats file. It never reads the
-original source data: comparing grid-point values with the source is spot-bee's job.
+Run stats-bee on a freshly generated anemoi dataset to make sure that its stored statistics are
+consistent with its data, and that the values are plausible: in physical range, no NaNs,
+constant fields constant. When a dataset is regenerated, a reference stats file shows what
+changed compared to the last accepted version.
+
+On a seeded sample of dates, it reduces every field to summary statistics (mean, stdev, min,
+max, NaN count) and checks those. It needs only the dataset, not the original source data:
+comparing grid-point values with the source is spot-bee's job.
 
 | check | what | severity |
 |---|---|---|
@@ -14,7 +18,7 @@ original source data: comparing grid-point values with the source is spot-bee's 
 | `matches_reference_stats` | the sampled dates match `reference_stats`, see [stats files](#stats-files) | ERROR / WARNING |
 
 ```bash
-uv run stats-bee <dataset.zarr> --spec <spec.yaml>                  # run the checks
+uv run stats-bee check <dataset.zarr> --spec <spec.yaml>            # run the checks
 uv run stats-bee dump <dataset.zarr> --spec <spec.yaml> -o out.yaml  # write a stats file
 uv run stats-bee compare out.yaml reference.yaml                     # compare two stats files
 ```
@@ -53,8 +57,24 @@ Floats are written with `repr`, which round-trips exactly, and NaN is written as
 
 ### Reference workflow in a dataset repo
 
+```
+fresh dataset ──► stats-bee check data.zarr              "is this dataset internally OK?"
+                     │ OK
+                     ▼
+                  stats-bee dump data.zarr -o checks/data.stats.yaml   ──► commit in the dataset repo
+
+later: dataset regenerated (new anemoi version, recipe change, rebuild)
+                  stats-bee dump new.zarr --dates-from checks/data.stats.yaml -o new.stats.yaml
+                  stats-bee compare new.stats.yaml checks/data.stats.yaml   "what changed?"
+```
+
+Some faults are invisible from inside the dataset. For example, +2 K on T_850 with the stored
+statistics updated to match leaves the dataset perfectly consistent. Only the comparison with the
+accepted version shows them.
+
 ```bash
 # once, after the dataset is built and checked: commit the result
+uv run stats-bee check <dataset.zarr> --spec checks/<dataset>.yaml
 uv run stats-bee dump <dataset.zarr> --spec checks/<dataset>.yaml -o checks/<dataset>.stats.yaml
 
 # in CI, or after rebuilding the dataset
@@ -72,7 +92,7 @@ no statistics. Each value is:
   zero, like wind components or precipitation.
 - *differs*: anything else
 
-With `reference_stats` in the spec, `stats-bee` (and `hive`) run the same comparison as the
+With `reference_stats` in the spec, `stats-bee check` (and `hive`) run the same comparison as the
 `matches_reference_stats` check, on the reference's dates.
 
 ## How the tolerances work

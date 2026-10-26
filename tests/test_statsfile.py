@@ -121,5 +121,5 @@ def test_cli(dataset_path, tmp_path, capsys):
     assert "T_850" in out and "stored mean differs" in out
     assert stats_bee_main(["compare", str(new), str(ref), "--format", "json"]) == 1
     assert json.loads(capsys.readouterr().out)["summary"]["ERROR"] == 1
-    assert stats_bee_main([str(dataset_path)]) == 0  # without a subcommand: run the checks
+    assert stats_bee_main(["check", str(dataset_path)]) == 0
     assert "checks run" in capsys.readouterr().out

@@ -3,9 +3,10 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 import zarr
 
-from varda_hive.cli import hive_main, meta_bee_main
+from varda_hive.cli import hive_main, meta_bee_main, stats_bee_main
 from varda_hive.honeycomb import CheckContext, Dataset, Severity, Spec, load_spec, run
 from varda_hive.honeycomb.statsfile import compute_stats, save_stats
 
@@ -55,7 +56,7 @@ def test_spot_matches_source(dataset_path, tmp_path):
 
 def test_cli(dataset_path, write_spec, capsys):
     spec = write_spec("variables: [T_2M]\n")
-    assert meta_bee_main([str(dataset_path), "--spec", str(spec)]) == 1
+    assert meta_bee_main(["check", str(dataset_path), "--spec", str(spec)]) == 1
     assert "variable not in spec" in capsys.readouterr().out
     assert hive_main([str(dataset_path), "--format", "json"]) == 0
     capsys.readouterr()
@@ -63,6 +64,12 @@ def test_cli(dataset_path, write_spec, capsys):
     listing = capsys.readouterr().out.splitlines()
     assert [line.split()[0] for line in listing if not line.startswith(" ")] == ["meta-bee", "stats-bee", "spot-bee"]
     assert "  no_nans " in "\n".join(listing)
+    assert stats_bee_main(["check", "--list"]) == 0
+    assert [line for line in capsys.readouterr().out.splitlines() if not line.startswith(" ")] == \
+        ["stats-bee  values and statistics"]
+    with pytest.raises(SystemExit) as exit_info:  # the subcommand is required
+        stats_bee_main([])
+    assert exit_info.value.code == 2
 
 
 def _stats_findings(path, spec, select, severity=Severity.ERROR):

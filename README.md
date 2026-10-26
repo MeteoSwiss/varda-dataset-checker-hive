@@ -25,7 +25,7 @@ All of them share the same core, the `honeycomb`:
 ```bash
 uv sync
 uv run hive <dataset.zarr> --spec <spec.yaml>          # all bees
-uv run meta-bee <dataset.zarr> --spec <spec.yaml>      # one bee
+uv run meta-bee check <dataset.zarr> --spec <spec.yaml>   # one bee
 uv run hive --list                                     # available checks
 uv run stats-bee dump <dataset.zarr> --spec <spec.yaml> -o stats.yaml   # stats file
 uv run stats-bee compare stats.yaml reference.yaml     # what is identical, what differs
