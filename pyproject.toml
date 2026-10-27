@@ -3,7 +3,7 @@ name = "varda-dataset-checker-hive"
 version = "0.1.0"
 description = "A hive of slim bees that check anemoi datasets for faults: metadata, statistics and spot-checks against the source."
 license = "BSD-3-Clause"
-readme = "README.md"
+readme = "README.rst"
 authors = [{ name = "Daniel Hupp", email = "daniel.hupp@meteoswiss.ch" }]
 requires-python = ">=3.12"
 dependencies = [
