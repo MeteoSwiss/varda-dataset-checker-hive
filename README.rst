@@ -1,92 +1,121 @@
-.. image:: https://img.shields.io/pypi/v/Open-Source-Template.svg
-    :target: https://pypi.org/project/Open-Source-Template/
+.. image:: https://github.com/MeteoSwiss/varda-dataset-checker-hive/actions/workflows/CI_test.yaml/badge.svg
+    :target: https://github.com/MeteoSwiss/varda-dataset-checker-hive/actions/workflows/CI_test.yaml
 
-.. image:: https://img.shields.io/pypi/pyversions/Open-Source-Template.svg
-    :target: https://pypi.org/project/Open-Source-Template/
+.. image:: https://github.com/MeteoSwiss/varda-dataset-checker-hive/actions/workflows/CI_publish_dev_documentation.yaml/badge.svg
+    :target: https://github.com/MeteoSwiss/varda-dataset-checker-hive/actions/workflows/CI_publish_dev_documentation.yaml
 
-.. image:: https://img.shields.io/pypi/l/Open-Source-Template.svg
-    :target: https://pypi.org/project/Open-Source-Template/
+==========================
+varda-dataset-checker-hive
+==========================
 
-.. image:: https://github.com/MeteoSwiss/Open-Source-Template/actions/workflows/github-code-scanning/codeql/badge.svg
-    :target: https://github.com/MeteoSwiss/Open-Source-Template/actions/workflows/github-code-scanning/codeql
+A hive of slim tools ("bees") that check anemoi datasets for faults. Each bee covers one layer:
 
-.. image:: https://github.com/MeteoSwiss/Open-Source-Template/actions/workflows/CI_test.yaml/badge.svg
-    :target: https://github.com/MeteoSwiss/Open-Source-Template/actions/workflows/CI_test.yaml
+.. list-table::
+   :header-rows: 1
 
-.. image:: https://github.com/MeteoSwiss/Open-Source-Template/actions/workflows/CI_publish_dev_documentation.yaml/badge.svg
-    :target: https://github.com/MeteoSwiss/Open-Source-Template/actions/workflows/CI_publish_dev_documentation.yaml
+   * - command
+     - layer
+     - reads
+   * - ``meta-bee``
+     - metadata and structure: variables, dates, frequency, grid, reference diff
+     - ``.zattrs`` and small arrays only
+   * - ``stats-bee``
+     - values: NaNs, constant fields, physical ranges, stored vs recomputed statistics, reference stats file
+       (`docs <https://github.com/MeteoSwiss/varda-dataset-checker-hive/blob/main/docs/stats-bee.md>`_)
+     - sampled time steps
+   * - ``spot-bee``
+     - sampled (time, variable, grid points) vs the original source
+     - sampled time steps + source
+   * - ``hive``
+     - runs all bees and merges their findings
+     -
 
-===============
-Getting Started
-===============
+All of them share the same core, the ``honeycomb``:
 
-A demo for the OSS template at MeteoSwiss.
+* dataset access
+* ``Finding`` / ``Report``
+* the spec schema
+* the check registry
+* seeded sampling
+* the ``Source`` interface
 
-The template can be use as an example how to configure MeteoSwiss Github projects.
+.. note::
 
-It uses:
+   Status: the stats-bee is implemented; meta-bee and spot-bee still have one template check each
+   (``variables_match_spec``, ``matches_source``).
 
-* Github actions to execute the CI/CD pipelines
-* Github pages to host the documentation
-* PyPI to publish the python packages
-
-Development Setup with Poetry
------------------------------
-
-Building the Project
-''''''''''''''''''''
-.. code-block:: console
-
-    $ cd open-source-template
-    $ poetry install
-
-Run Tests
-'''''''''
-
-.. code-block:: console
-
-    $ poetry run pytest
-
-Run Quality Tools
-'''''''''''''''''
+Usage
+-----
 
 .. code-block:: console
 
-    $ poetry run pylint open_source_template
-    $ poetry run mypy open_source_template
+    $ uv sync
+    $ uv run hive <dataset.zarr> --spec <spec.yaml>                          # all bees
+    $ uv run meta-bee check <dataset.zarr> --spec <spec.yaml>                # one bee
+    $ uv run hive --list                                                     # available checks
+    $ uv run stats-bee dump <dataset.zarr> --spec <spec.yaml> -o stats.yaml  # stats file
+    $ uv run stats-bee compare stats.yaml reference.yaml                     # what is identical, what differs
+    $ uv run hive <dataset.zarr> --spec <spec.yaml> --format json --fail-on warning
 
-Generate Documentation
-''''''''''''''''''''''
+Exit code is 0 when no finding reaches ``--fail-on`` (default ``error``), and 1 otherwise.
+
+Findings, not assertions
+------------------------
+
+Checks yield ``Finding``\ s with a severity of ``ERROR``, ``WARNING`` or ``INFO``. They never assert.
+The same check therefore works from the CLI, in CI, in pytest or in a notebook, and expected
+noise can be reported as a warning instead of a failure. Examples of such noise are run-to-run
+ICON differences and metadata churn between anemoi-datasets versions. A check that crashes is
+reported as an ``ERROR`` finding, so it can't hide the results of the other checks.
+
+What belongs where
+------------------
+
+The hive is generic. Everything dataset-specific lives in the **dataset's own repo**:
+
+* **The spec** (``checks/<dataset>.yaml``): expected variables, dates, frequency, grid, constant
+  fields, physical ranges, sampling and tolerances. Every field is optional, and unknown keys are
+  rejected. See ``templates/spec.example.yaml``.
+* **The source plug-in**: a class with ``fetch(variable, date) -> np.ndarray | None`` that spot-bee
+  uses to get the original values, e.g. from GRIB via a grib-index DB for ICH1. The spec names it
+  by import path:
+
+  .. code-block:: yaml
+
+      source:
+        plugin: ich1_source.py:GribIndexSource     # or package.module:Class
+        args: {ana_db: ..., fg_db: ...}
+
+  See ``templates/source_plugin_example.py``, which reads another zarr.
+
+Adding a check
+--------------
+
+.. code-block:: python
+
+    from varda_hive.honeycomb import CheckContext, check, error
+
+    @check("stats")
+    def no_negative_precipitation(ctx: CheckContext):
+        """Precipitation is never negative."""
+        ...
+        yield error("negative values", variable="TOT_PREC_1H", time="2020-03-05T04:00:00")
+
+Put it in ``src/varda_hive/bees/<bee>/checks.py``. Then add a test showing that it passes on a
+clean synthetic dataset and fires on a broken one, as in ``tests/test_bees.py``.
+
+Development
+-----------
 
 .. code-block:: console
 
-    $ poetry run sphinx-build doc doc/_build
+    $ uv sync && uv run pytest
+    $ uv run pytest -m faulty    # stats-bee on Varda-tiny and its faulty variants (needs /scratch)
 
-Then open the index.html file generated in *open-source-template/doc/_build/*.
-
-Build wheels
-''''''''''''
+Quality tools:
 
 .. code-block:: console
 
-    $ poetry build
-
-Using the Library
------------------
-
-To install open-source-template in your project, run this command in your terminal:
-
-.. code-block:: console
-
-    $ poetry add open-source-template
-
-You can then use the library in your project through
-
-    import open_source_template
-
-Releasing
----------
-
-* Adapt CHANGELOG.rst with release information
-* Adapt ``doc/_static/switcher_config.json`` adding the new documentation URL for the release
-* Create a new Release in the Github project
+    $ uv run pylint src/varda_hive
+    $ uv run mypy src/varda_hive
+    $ uv run yapf --diff --recursive src tests
