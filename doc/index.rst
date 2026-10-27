@@ -1,5 +1,5 @@
-Open Source Template
-====================
+varda-dataset-checker-hive
+==========================
 
 .. toctree::
    :maxdepth: 2

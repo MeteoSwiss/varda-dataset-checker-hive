@@ -32,9 +32,15 @@ lint = [
     "pylint>=3.3",
     "yapf>=0.43",
 ]
+doc = [
+    "pydata-sphinx-theme>=0.16.1",
+    "sphinx>=8.2.3",
+    "sphinx-autoapi>=3.6",
+]
 dev = [
     { include-group = "test" },
     { include-group = "lint" },
+    { include-group = "doc" },
 ]
 
 [build-system]

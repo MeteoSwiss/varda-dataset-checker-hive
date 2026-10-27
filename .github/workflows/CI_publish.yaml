@@ -29,21 +29,18 @@ jobs:
     - name: Checkout current repository
       uses: actions/checkout@v4
 
-    - name: Set up Python 3.12
-      uses: actions/setup-python@v5
+    - name: Install uv and Python 3.12
+      uses: astral-sh/setup-uv@v6
       with:
         python-version: 3.12
 
-    - name: Install poetry and python package
-      run: |
-        python -m pip install --upgrade pip
-        python -m pip install poetry
-        poetry install
+    - name: Install python package
+      run: uv sync --locked
 
     - name: Build artifacts
       run: |
-        poetry version ${GITHUB_REF#refs/tags/}
-        poetry build
+        uv version --frozen ${GITHUB_REF#refs/tags/}
+        uv build
 
     - name: Publish to PyPi
       uses: pypa/gh-action-pypi-publish@release/v1
@@ -57,7 +54,7 @@ jobs:
         VERSION_SWITCHER_CONFIG_URL: ../_static/switcher_config.json
         GITHUB_SHA: ${{ github.sha }}
       # Set the buildId to the first 7 digits of the commit hash
-      run: BUILD_ID=$(echo ${GITHUB_SHA::7}) poetry run sphinx-build doc doc/_build/${{ github.ref_name }}
+      run: BUILD_ID=$(echo ${GITHUB_SHA::7}) uv run sphinx-build doc doc/_build/${{ github.ref_name }}
 
     - name: Publish documentation
       uses: peaceiris/actions-gh-pages@v3
