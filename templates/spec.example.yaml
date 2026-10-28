@@ -1,0 +1,40 @@
+# Example dataset spec for varda-dataset-checker-hive.
+# Copy this into the dataset's own repo (e.g. checks/<dataset>.yaml) and adapt.
+# Every field is optional: checks that need a missing field report "skipped".
+# Unknown keys are rejected, so typos fail loudly.
+
+name: varda-kenda-ch1-2km-2020-2020-1h-v1.0-pl13-test
+
+# meta-bee: expected structure
+variables: [T_2M, U_10M, V_10M, T_850]       # exact set of variables
+start_date: 2020-03-01T00:00:00
+end_date: 2020-03-30T23:00:00
+frequency: 1h
+grid_points: 30676
+constant_fields: [FIS, FR_LAND]
+
+# stats-bee: physical ranges per variable (path relative to this file)
+ranges_file: physical_ranges.example.yaml
+# stats-bee: stats file to compare against (written by `stats-bee dump`, committed next to this spec)
+reference_stats: varda-tiny.stats.yaml
+
+# Seeded sampling used by stats-bee and spot-bee
+sampling:
+  seed: 0
+  n_dates: 20           # random time indices, or "all" for a full pass (exact statistics)
+  n_points: 1000        # grid points per field (spot-bee)
+  include_dates: []     # time indices always checked in addition
+
+tolerances:
+  statistics_rtol: 1.0e-5   # recomputed vs stored statistics: floating-point part
+  z_threshold: 5.0          #   ... plus z_threshold * sampling error (0 for n_dates: all)
+  compare_atol_stdev: 0.0   # stats file vs reference: "close" within this * stdev, else "differs"
+  source_rtol: 1.0e-4       # dataset vs source values
+  source_atol: 1.0e-4
+
+# spot-bee: where the original values come from. "file.py:Class" (relative to
+# this file) or "package.module:Class"; `args` are passed to the constructor.
+source:
+  plugin: source_plugin_example.py:ZarrSource
+  args:
+    path: /path/to/reference.zarr

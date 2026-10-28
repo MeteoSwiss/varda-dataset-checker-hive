@@ -1,0 +1,10 @@
+# Plausible physical ranges per variable, used by stats-bee (planned check).
+# Values outside [min, max] are reported. Keep the bounds loose: they catch
+# unit errors and garbage, not unusual weather.
+T_2M:        {min: 200.0, max: 330.0, units: K}
+T_850:       {min: 200.0, max: 320.0, units: K}
+U_10M:       {min: -80.0, max: 80.0, units: m s-1}
+V_10M:       {min: -80.0, max: 80.0, units: m s-1}
+PS:          {min: 50000.0, max: 110000.0, units: Pa}
+TOT_PREC_1H: {min: 0.0, max: 0.3, units: m}
+CLCT:        {min: 0.0, max: 105.0, units: "%"}   # ICON slightly exceeds 100 (103 on varda-tiny)

@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for your interest in contributing to **Open Source Template**! We welcome contributions from the community and are grateful for your support.
+Thank you for your interest in contributing to **varda-dataset-checker-hive**! We welcome contributions from the community and are grateful for your support.
 
 ## Code of Conduct
 
@@ -43,8 +43,8 @@ Feature suggestions are welcome! Please create an issue using our *feature reque
 
 ### Prerequisites
 
-- Python 3.11 or higher (up to 3.12)
-- Poetry (for dependency management)
+- Python 3.12 or higher
+- [uv](https://docs.astral.sh/uv/) (for dependency management)
 - Git
 
 ### Setting Up Your Environment
@@ -52,20 +52,20 @@ Feature suggestions are welcome! Please create an issue using our *feature reque
 1. Clone your fork of the repository:
 
    ```console
-   $ git clone https://github.com/YOUR-USERNAME/open-source-template.git
-   $ cd open-source-template
+   $ git clone https://github.com/YOUR-USERNAME/varda-dataset-checker-hive.git
+   $ cd varda-dataset-checker-hive
    ```
 
 2. Install dependencies:
 
    ```console
-   $ poetry install
+   $ uv sync
    ```
 
 3. Verify your setup by running the tests:
 
    ```console
-   $ poetry run pytest
+   $ uv run pytest
    ```
 
 ## Code Style and Quality
@@ -79,7 +79,7 @@ We use [YAPF](https://github.com/google/yapf) for code formatting with PEP 8 sty
 Format your code before committing:
 
 ```console
-$ poetry run yapf -r -i open_source_template
+$ uv run yapf -r -i src tests
 ```
 
 ### Linting with Pylint
@@ -87,7 +87,7 @@ $ poetry run yapf -r -i open_source_template
 Run pylint to check for code quality issues:
 
 ```console
-$ poetry run pylint open_source_template
+$ uv run pylint src/varda_hive
 ```
 
 The project configuration is in `pyproject.toml`. We disable certain docstring requirements but maintain other quality standards.
@@ -97,7 +97,7 @@ The project configuration is in `pyproject.toml`. We disable certain docstring r
 We enforce type hints throughout the codebase:
 
 ```console
-$ poetry run mypy open_source_template
+$ uv run mypy src/varda_hive
 ```
 
 All function definitions must include type annotations.
@@ -107,7 +107,7 @@ All function definitions must include type annotations.
 ### Writing Tests
 
 - Write unit tests for all new code
-- Place tests in the `test/` directory
+- Place tests in the `tests/` directory
 - Follow the existing test structure and naming conventions
 - Use descriptive test names that explain what is being tested
 - Aim for high code coverage (check with `pytest-cov`)
@@ -117,13 +117,13 @@ All function definitions must include type annotations.
 Run all tests:
 
 ```console
-$ poetry run pytest
+$ uv run pytest
 ```
 
 Run tests with coverage:
 
 ```console
-$ poetry run pytest --cov=open_source_template --cov-report=html
+$ uv run pytest --cov=varda_hive --cov-report=html
 ```
 
 ## Documentation
@@ -131,28 +131,22 @@ $ poetry run pytest --cov=open_source_template --cov-report=html
 - Update documentation for any changed functionality
 - Add docstrings to new functions, classes, and modules
 - Follow the existing documentation style
-- Build documentation locally to verify changes:
-
-  ```console
-  $ poetry run sphinx-build doc doc/_build
-  ```
+- Documentation is Markdown: `README.md` and the pages in `docs/`
 
 ## Pull Request Process
 
-1. **Update the CHANGELOG**: Add a brief description of your changes in **CHANGELOG**
+1. **Update AUTHORS**: If this is your first contribution, add your name to the **AUTHORS** file
 
-2. **Update AUTHORS**: If this is your first contribution, add your name to the **AUTHORS** file
-
-3. **Create a Pull Request**: Use our **pull request template** and ensure you:
+2. **Create a Pull Request**: Use our **pull request template** and ensure you:
 
    - Provide a clear description of the changes
    - Reference any related issues (e.g., "Closes #123")
    - Complete the checklist in the PR template
    - Ensure all CI checks pass
 
-4. **Code Review**: A maintainer will review your PR. Be prepared to make changes based on feedback
+3. **Code Review**: A maintainer will review your PR. Be prepared to make changes based on feedback
 
-5. **Merge**: Once approved and all checks pass, a maintainer will merge your PR
+4. **Merge**: Once approved and all checks pass, a maintainer will merge your PR
 
 ### Commit Messages
 
@@ -185,4 +179,4 @@ If you have questions about contributing, please:
 - Review the documentation
 - Create a new issue with your question
 
-Thank you for contributing to Open Source Template!
+Thank you for contributing to varda-dataset-checker-hive!
