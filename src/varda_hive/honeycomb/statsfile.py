@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 import json
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 import warnings
 
 import numpy as np
@@ -111,7 +111,8 @@ def _summarise(step: np.ndarray) -> np.ndarray:
                          np.nanmax(x, axis=1), np.isnan(x).sum(axis=1)], axis=1)
 
 
-def _recompute(per_date: np.ndarray, n_window: int, variables: list[str], seed: int) -> dict[str, dict]:
+def _recompute(  # pylint: disable=too-many-locals
+        per_date: np.ndarray, n_window: int, variables: list[str], seed: int) -> dict[str, dict]:
     """Estimate the window statistics from the per-date summaries of a random sample of dates.
 
     Every date has the same number of grid points, so the mean is the mean of the per-date
@@ -125,7 +126,7 @@ def _recompute(per_date: np.ndarray, n_window: int, variables: list[str], seed: 
     n = len(per_date)
     m, s, lo, hi = (per_date[:, :, j] for j in range(4))
     fpc = math.sqrt(max(0.0, 1 - n / n_window)) if n_window else 0.0
-    out = {name: {"n_dates": n, "exact": n == n_window, "fpc": fpc} for name in variables}
+    out: dict[str, dict[str, Any]] = {name: {"n_dates": n, "exact": n == n_window, "fpc": fpc} for name in variables}
     if n == 0:
         return out
     with warnings.catch_warnings():
@@ -145,7 +146,7 @@ def _recompute(per_date: np.ndarray, n_window: int, variables: list[str], seed: 
     return out
 
 
-def _num(x, kind=float):
+def _num(x: Any, kind: Callable[[float], float] = float) -> float | None:
     x = float(x)
     return None if math.isnan(x) else kind(x)
 
@@ -167,11 +168,11 @@ def save_stats(stats: dict, path: str | Path | None) -> None:
     if path in (None, "-"):
         print(text, end="")
     else:
-        Path(path).write_text(text)
+        Path(path).write_text(text, encoding="utf-8")
 
 
 def load_stats(path: str | Path) -> dict:
-    text = Path(path).read_text()
+    text = Path(path).read_text(encoding="utf-8")
     stats = yaml.load(text, Loader=_Loader) if Path(path).suffix in YAML_SUFFIXES else json.loads(text)
     if stats.get("format") != FORMAT:
         raise ValueError(f"{path}: not a stats file of format {FORMAT!r}")
@@ -190,7 +191,8 @@ class Comparison:
     counts: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
-def compare_stats(stats: dict, reference: dict, atol_stdev: float = 0.0) -> Comparison:
+def compare_stats(  # pylint: disable=too-many-locals
+        stats: dict, reference: dict, atol_stdev: float = 0.0) -> Comparison:
     """Compare `stats` with `reference` cell by cell: the stored statistics, and every per-date
     summary on the dates both files have. Dates are matched by value, not by position."""
     result = Comparison()
@@ -244,7 +246,7 @@ def compare_stats(stats: dict, reference: dict, atol_stdev: float = 0.0) -> Comp
     return result
 
 
-def _classify(value, reference, atol: float) -> str:
+def _classify(value: float | None, reference: float | None, atol: float) -> str:
     if value == reference:  # also both None (NaN)
         return IDENTICAL
     if value is None or reference is None:
@@ -252,7 +254,7 @@ def _classify(value, reference, atol: float) -> str:
     return CLOSE if abs(value - reference) <= atol else DIFFERS
 
 
-def _finding(verdict: str, what: str, variable: str, value, reference) -> Finding:
+def _finding(verdict: str, what: str, variable: str, value: float | None, reference: float | None) -> Finding:
     make = error if verdict == DIFFERS else warning
     diff = abs(value - reference) if value is not None and reference is not None else None
     return make(f"{what} {verdict}: {value} vs {reference}", variable=variable,

@@ -33,15 +33,15 @@ class Finding:
         return d
 
 
-def error(message: str, **kwargs) -> Finding:
+def error(message: str, **kwargs: Any) -> Finding:
     return Finding(Severity.ERROR, message, **kwargs)
 
 
-def warning(message: str, **kwargs) -> Finding:
+def warning(message: str, **kwargs: Any) -> Finding:
     return Finding(Severity.WARNING, message, **kwargs)
 
 
-def info(message: str, **kwargs) -> Finding:
+def info(message: str, **kwargs: Any) -> Finding:
     return Finding(Severity.INFO, message, **kwargs)
 
 

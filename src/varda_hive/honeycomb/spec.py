@@ -67,7 +67,7 @@ def load_spec(path: str | Path | None) -> Spec:
     if path is None:
         return Spec()
     path = Path(path)
-    raw = yaml.safe_load(path.read_text()) or {}
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     spec = Spec(**raw, base_dir=path.resolve().parent)
     for key in ("ranges_file", "reference_stats"):
         value = getattr(spec, key)

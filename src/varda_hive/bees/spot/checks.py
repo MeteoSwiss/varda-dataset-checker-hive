@@ -1,13 +1,15 @@
 """spot-bee: compare a seeded sample of (time, variable, grid points)
 against the original source, provided by the dataset's source plug-in."""
+from typing import Iterator
+
 import numpy as np
 
-from ...honeycomb import CheckContext, check, error, info, load_source, warning
+from ...honeycomb import CheckContext, Finding, check, error, info, load_source, warning
 from ...honeycomb.sampling import sample_points, sample_time_indices
 
 
 @check("spot")
-def matches_source(ctx: CheckContext):
+def matches_source(ctx: CheckContext) -> Iterator[Finding]:
     """Sampled values agree with the source within the spec tolerances."""
     if "source" not in ctx.cache:
         ctx.cache["source"] = load_source(ctx.spec)

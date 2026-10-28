@@ -20,7 +20,6 @@ Closes #ISSUE_ID or References #ISSUE_ID
 **Checklist**
 
 - [ ] Code is well documented and follows project conventions (linted, formatted)
-- [ ] CHANGELOG updated (if applicable)
 - [ ] License header is added to all new files
 - [ ] For a new contributors, their name has been added to the AUTHORS file
 - [ ] No sensitive data or secrets are exposed

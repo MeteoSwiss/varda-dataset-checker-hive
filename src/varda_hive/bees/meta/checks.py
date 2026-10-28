@@ -3,11 +3,13 @@
 Planned: anemoi-datasets validate, structure diff vs a reference dataset,
 date/frequency/missing_dates consistency, grid and resolution vs spec.
 """
-from ...honeycomb import CheckContext, check, error, info
+from typing import Iterator
+
+from ...honeycomb import CheckContext, Finding, check, error, info
 
 
 @check("meta")
-def variables_match_spec(ctx: CheckContext):
+def variables_match_spec(ctx: CheckContext) -> Iterator[Finding]:
     """The dataset has exactly the variables listed in the spec."""
     expected = ctx.spec.variables
     if expected is None:

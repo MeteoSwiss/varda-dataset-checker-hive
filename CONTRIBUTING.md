@@ -131,28 +131,22 @@ $ uv run pytest --cov=varda_hive --cov-report=html
 - Update documentation for any changed functionality
 - Add docstrings to new functions, classes, and modules
 - Follow the existing documentation style
-- Build documentation locally to verify changes:
-
-  ```console
-  $ uv run sphinx-build doc doc/_build
-  ```
+- Documentation is Markdown: `README.md` and the pages in `docs/`
 
 ## Pull Request Process
 
-1. **Update the CHANGELOG**: Add a brief description of your changes in **CHANGELOG**
+1. **Update AUTHORS**: If this is your first contribution, add your name to the **AUTHORS** file
 
-2. **Update AUTHORS**: If this is your first contribution, add your name to the **AUTHORS** file
-
-3. **Create a Pull Request**: Use our **pull request template** and ensure you:
+2. **Create a Pull Request**: Use our **pull request template** and ensure you:
 
    - Provide a clear description of the changes
    - Reference any related issues (e.g., "Closes #123")
    - Complete the checklist in the PR template
    - Ensure all CI checks pass
 
-4. **Code Review**: A maintainer will review your PR. Be prepared to make changes based on feedback
+3. **Code Review**: A maintainer will review your PR. Be prepared to make changes based on feedback
 
-5. **Merge**: Once approved and all checks pass, a maintainer will merge your PR
+4. **Merge**: Once approved and all checks pass, a maintainer will merge your PR
 
 ### Commit Messages
 

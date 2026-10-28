@@ -4,10 +4,11 @@ All checks work on the stats file content (see honeycomb/statsfile.py),
 computed once per run from the sampled dates and shared via `ctx.cache`.
 """
 import math
+from typing import Iterator
 
 import yaml
 
-from ...honeycomb import CheckContext, check, error, info, warning
+from ...honeycomb import CheckContext, Finding, check, error, info, warning
 from ...honeycomb.statsfile import compare_stats, compute_stats, load_stats
 
 
@@ -21,7 +22,7 @@ def _stats(ctx: CheckContext) -> dict:
 
 
 @check("stats")
-def statistics_consistent(ctx: CheckContext):
+def statistics_consistent(ctx: CheckContext) -> Iterator[Finding]:  # pylint: disable=too-many-locals
     """Stored mean/stdev/min/max are self-consistent and match the sampled dates within the sampling error.
 
     Self-consistent: no NaN, min <= mean <= max, stdev 0 exactly when min == max. A sample can
@@ -71,7 +72,7 @@ def statistics_consistent(ctx: CheckContext):
         if rec["maximum"] > hi + slack or (rec["exact"] and rec["maximum"] < hi - slack):
             yield error(f"stored maximum {hi:.6g} but the sampled dates reach {rec['maximum']:.6g}",
                         variable=name, details={"stored": hi, "recomputed": rec["maximum"], "exact": rec["exact"]})
-    n = next(iter(stats["recomputed"].values()), {}).get("n_dates", 0)
+    n = next((rec["n_dates"] for rec in stats["recomputed"].values()), 0)
     yield info(f"statistics recomputed from {n} dates", details=_resolution(stats, tol.z_threshold))
 
 
@@ -89,7 +90,7 @@ def _resolution(stats: dict, z: float) -> dict:
 
 
 @check("stats")
-def physical_ranges(ctx: CheckContext):
+def physical_ranges(ctx: CheckContext) -> Iterator[Finding]:
     """Sampled values and stored min/max lie inside the ranges of the spec's `ranges_file`.
 
     Skipped without a `ranges_file`; variables not in it are listed as INFO.
@@ -118,7 +119,7 @@ def physical_ranges(ctx: CheckContext):
 
 
 @check("stats")
-def no_nans(ctx: CheckContext):
+def no_nans(ctx: CheckContext) -> Iterator[Finding]:
     """No NaNs on the sampled dates, unless the dataset sets `allow_nans`."""
     if ctx.dataset.attrs.get("allow_nans", False):
         yield info("skipped: dataset allows NaNs")
@@ -131,7 +132,7 @@ def no_nans(ctx: CheckContext):
 
 
 @check("stats")
-def constant_fields(ctx: CheckContext):
+def constant_fields(ctx: CheckContext) -> Iterator[Finding]:
     """Fields in `constant_fields` never change; no other field is constant in time or uniform in space.
 
     `constant_fields` comes from the dataset, or from the spec if the dataset has none. A field in
@@ -165,7 +166,7 @@ def constant_fields(ctx: CheckContext):
 
 
 @check("stats")
-def matches_reference_stats(ctx: CheckContext):
+def matches_reference_stats(ctx: CheckContext) -> Iterator[Finding]:
     """Stored statistics and per-date values match the spec's `reference_stats`, on its dates.
 
     Skipped without `reference_stats`. Same comparison as `stats-bee compare`.

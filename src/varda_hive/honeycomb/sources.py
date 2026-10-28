@@ -32,6 +32,8 @@ def load_source(spec: Spec) -> Source | None:
         if not path.is_absolute():
             path = spec.base_dir / path
         module_spec = importlib.util.spec_from_file_location(path.stem, path)
+        if module_spec is None or module_spec.loader is None:
+            raise ImportError(f"cannot load source plugin from {path}")
         module = importlib.util.module_from_spec(module_spec)
         module_spec.loader.exec_module(module)
     else:

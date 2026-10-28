@@ -8,6 +8,7 @@ Exit code: 0 if no finding reaches --fail-on (default: error), 1 otherwise,
 """
 from argparse import ArgumentParser, Namespace, RawDescriptionHelpFormatter
 import sys
+from typing import Callable, Sequence
 
 from .honeycomb import BEES, CheckContext, Dataset, Severity, checks_for, load_spec, run
 from .honeycomb.findings import Report
@@ -20,6 +21,9 @@ BEE_DESCRIPTIONS = {
     "stats": "values and statistics",
     "spot": "sampled values vs the source",
 }
+
+# An extra subcommand of a bee: (name, help, add_args, handler), with handler(args) -> exit code.
+Subcommand = tuple[str, str, Callable[[ArgumentParser], None], Callable[[Namespace], int]]
 
 
 def _add_check_args(p: ArgumentParser, with_bees: bool) -> None:
@@ -60,16 +64,15 @@ def _run_checks(args: Namespace, bees: list[str], prog: str) -> int:
     return report.exit_code(Severity[args.fail_on.upper()])
 
 
-def hive_main(argv=None) -> int:
+def hive_main(argv: list[str] | None = None) -> int:
     p = ArgumentParser(prog="hive", description="Run all bees on an anemoi dataset.")
     _add_check_args(p, with_bees=True)
     args = p.parse_args(argv)
     return _run_checks(args, args.bees, "hive")
 
 
-def _bee_main(bee: str, description: str, argv, extra=()) -> int:
-    """A bee's command: `check` plus the bee's `extra` subcommands, given as
-    (name, help, add_args, handler) with handler(args) -> exit code."""
+def _bee_main(bee: str, description: str, argv: list[str] | None, extra: Sequence[Subcommand] = ()) -> int:
+    """A bee's command: `check` plus the bee's `extra` subcommands."""
     prog = f"{bee}-bee"
     p = ArgumentParser(prog=prog, description=description)
     commands = p.add_subparsers(dest="command", required=True, metavar="COMMAND")
@@ -77,19 +80,19 @@ def _bee_main(bee: str, description: str, argv, extra=()) -> int:
                                 description=f"Run the {prog} checks on an anemoi dataset.")
     _add_check_args(check, with_bees=False)
     check.set_defaults(func=lambda args: _run_checks(args, [bee], f"{prog} check"))
-    for name, help, add_args, handler in extra:
-        sub = commands.add_parser(name, help=help, formatter_class=RawDescriptionHelpFormatter)
+    for name, help_text, add_args, handler in extra:
+        sub = commands.add_parser(name, help=help_text, formatter_class=RawDescriptionHelpFormatter)
         add_args(sub)
         sub.set_defaults(func=handler)
     args = p.parse_args(argv)
     return args.func(args)
 
 
-def meta_bee_main(argv=None) -> int:
+def meta_bee_main(argv: list[str] | None = None) -> int:
     return _bee_main("meta", "Check metadata and structure of an anemoi dataset.", argv)
 
 
-def stats_bee_main(argv=None) -> int:
+def stats_bee_main(argv: list[str] | None = None) -> int:
     return _bee_main("stats", "Check values and statistics of an anemoi dataset, and write and compare "
                      "stats files. See docs/stats-bee.md.", argv, extra=[
                          ("dump", "write the stats file of a dataset", _add_dump_args, _dump),
@@ -97,7 +100,7 @@ def stats_bee_main(argv=None) -> int:
                      ])
 
 
-def spot_bee_main(argv=None) -> int:
+def spot_bee_main(argv: list[str] | None = None) -> int:
     return _bee_main("spot", "Spot-check an anemoi dataset against its source.", argv)
 
 
@@ -112,7 +115,8 @@ See docs/stats-bee.md for the file layout and how the tolerances work."""
     p.add_argument("dataset", help="path to the anemoi zarr dataset")
     p.add_argument("--spec", help="dataset spec YAML (sampling settings)")
     p.add_argument("--dates-from", metavar="STATS", help="use the dates of this stats file (e.g. the reference)")
-    p.add_argument("-o", "--output", default="-", help="output file, YAML for .yaml/.yml, otherwise JSON (default: JSON to stdout)")
+    p.add_argument("-o", "--output", default="-",
+                   help="output file, YAML for .yaml/.yml, otherwise JSON (default: JSON to stdout)")
 
 
 def _dump(args: Namespace) -> int:

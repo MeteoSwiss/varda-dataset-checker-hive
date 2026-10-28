@@ -6,6 +6,7 @@ findings and turns a crashing check into an ERROR finding, so one broken
 check never hides the results of the others.
 """
 from dataclasses import dataclass, field
+import importlib
 import traceback
 from typing import Callable, Iterable
 
@@ -24,22 +25,25 @@ class CheckContext:
     cache: dict = field(default_factory=dict)  # shared between checks of one run, e.g. a loaded source
 
 
+CheckFn = Callable[[CheckContext], Iterable[Finding]]
+
+
 @dataclass(frozen=True)
 class CheckInfo:
     bee: str
     name: str
-    fn: Callable[[CheckContext], Iterable[Finding]]
+    fn: CheckFn
     description: str
 
 
 _REGISTRY: dict[str, dict[str, CheckInfo]] = {bee: {} for bee in BEES}
 
 
-def check(bee: str, name: str | None = None):
+def check(bee: str, name: str | None = None) -> Callable[[CheckFn], CheckFn]:
     if bee not in _REGISTRY:
         raise ValueError(f"unknown bee {bee!r}, expected one of {BEES}")
 
-    def register(fn):
+    def register(fn: CheckFn) -> CheckFn:
         check_name = name or fn.__name__
         doc = (fn.__doc__ or "").strip()
         _REGISTRY[bee][check_name] = CheckInfo(bee, check_name, fn, doc.splitlines()[0] if doc else "")
@@ -63,7 +67,8 @@ def run(ctx: CheckContext, bees: Iterable[str] = BEES, select: Iterable[str] | N
                 continue
             try:
                 findings = list(info.fn(ctx))
-            except Exception as e:  # noqa: BLE001 - reported, not swallowed
+            # Reported, not swallowed.
+            except Exception as e:  # noqa: BLE001  # pylint: disable=broad-exception-caught
                 findings = [error(f"check crashed: {type(e).__name__}: {e}",
                                   details={"traceback": traceback.format_exc()})]
             report.add(bee, info.name, findings)
@@ -71,5 +76,6 @@ def run(ctx: CheckContext, bees: Iterable[str] = BEES, select: Iterable[str] | N
 
 
 def _load_bees() -> None:
-    # Importing the bee packages registers their checks.
-    from .. import bees  # noqa: F401
+    # Importing the bee packages registers their checks. Imported by name, at call time, because
+    # the bees import the honeycomb themselves.
+    importlib.import_module("..bees", __package__)
