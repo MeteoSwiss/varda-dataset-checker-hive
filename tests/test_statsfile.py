@@ -13,7 +13,7 @@ import zarr
 
 from varda_hive.cli import stats_bee_main
 from varda_hive.honeycomb import CheckContext, Dataset, Severity, Spec, run
-from varda_hive.honeycomb.statsfile import compare_stats, compute_stats, load_stats, save_stats
+from varda_hive.bees.stats.statsfile import compare_stats, compute_stats, load_stats, save_stats
 
 from conftest import NT, VARIABLES, build_dataset
 

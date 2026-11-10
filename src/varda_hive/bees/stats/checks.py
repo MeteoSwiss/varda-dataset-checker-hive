@@ -6,7 +6,7 @@
 
 """stats-bee: checks on the values and stored statistics.
 
-All checks work on the stats file content (see honeycomb/statsfile.py),
+All checks work on the stats file content (see statsfile.py),
 computed once per run from the sampled dates and shared via `ctx.cache`.
 """
 import math
@@ -15,7 +15,7 @@ from typing import Iterator
 import yaml
 
 from ...honeycomb import CheckContext, Finding, check, error, info, warning
-from ...honeycomb.statsfile import compare_stats, compute_stats, load_stats
+from .statsfile import compare_stats, compute_stats, load_stats
 
 
 def _stats(ctx: CheckContext) -> dict:

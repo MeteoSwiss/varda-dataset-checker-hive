@@ -28,11 +28,10 @@ import warnings
 import numpy as np
 import yaml
 
-from .. import __version__
-from .dataset import STATISTICS, Dataset
-from .findings import Finding, error, info, warning
-from .sampling import random_time_indices
-from .spec import Spec
+from ... import __version__
+from ...honeycomb import Dataset, Finding, Spec, error, info, warning
+from ...honeycomb.dataset import STATISTICS
+from ...honeycomb.sampling import random_time_indices
 
 FORMAT = "varda-hive-stats/1"
 PER_DATE = ("mean", "stdev", "minimum", "maximum", "n_nan")

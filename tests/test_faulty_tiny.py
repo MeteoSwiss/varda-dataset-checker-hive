@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from varda_hive.honeycomb import CheckContext, Dataset, Severity, load_spec, run
-from varda_hive.honeycomb.statsfile import compute_stats, save_stats
+from varda_hive.bees.stats.statsfile import compute_stats, save_stats
 
 FAULTY = Path("/scratch/mch/huppd/ich1-analysis-tiny-dataset/faulty")
 CLEAN = Path("/scratch/mch/huppd/varda/ich1-analysis-anemoi-dataset/ml_test/datasets/"
