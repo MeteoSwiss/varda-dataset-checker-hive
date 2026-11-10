@@ -1,3 +1,9 @@
+# Copyright (c) 2026 MeteoSwiss, contributors listed in AUTHORS
+#
+# Distributed under the terms of the BSD 3-Clause License.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 """Seeded sampling, so every run with the same spec checks the same cells."""
 import numpy as np
 

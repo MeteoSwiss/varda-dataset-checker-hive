@@ -1,3 +1,9 @@
+# Copyright (c) 2026 MeteoSwiss, contributors listed in AUTHORS
+#
+# Distributed under the terms of the BSD 3-Clause License.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 """Where spot-bee gets the "true" values from.
 
 A source is any object with `fetch(variable, date) -> np.ndarray | None`

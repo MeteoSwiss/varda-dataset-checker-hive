@@ -1,3 +1,9 @@
+# Copyright (c) 2026 MeteoSwiss, contributors listed in AUTHORS
+#
+# Distributed under the terms of the BSD 3-Clause License.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 """Read-only access to an anemoi dataset (zarr v2) without going through
 anemoi-datasets, so checks see exactly what is stored on disk."""
 from functools import cached_property

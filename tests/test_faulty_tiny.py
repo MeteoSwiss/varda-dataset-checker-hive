@@ -1,3 +1,9 @@
+# Copyright (c) 2026 MeteoSwiss, contributors listed in AUTHORS
+#
+# Distributed under the terms of the BSD 3-Clause License.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 """The stats-bee on Varda-tiny and its faulty variants (MRB-1032).
 
 Opt-in: `uv run pytest -m faulty`. Skipped when the datasets are not on this machine.

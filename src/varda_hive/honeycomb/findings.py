@@ -1,3 +1,9 @@
+# Copyright (c) 2026 MeteoSwiss, contributors listed in AUTHORS
+#
+# Distributed under the terms of the BSD 3-Clause License.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 """What a check reports: `Finding`s, collected into a `Report`.
 
 Checks never raise or assert to signal a problem; they yield findings with a

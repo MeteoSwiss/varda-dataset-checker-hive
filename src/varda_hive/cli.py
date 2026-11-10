@@ -1,3 +1,9 @@
+# Copyright (c) 2026 MeteoSwiss, contributors listed in AUTHORS
+#
+# Distributed under the terms of the BSD 3-Clause License.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 """Command-line entry points:
 - `hive <dataset>` runs all bees
 - `meta-bee check`, `stats-bee check` and `spot-bee check` run one bee each, with the same options

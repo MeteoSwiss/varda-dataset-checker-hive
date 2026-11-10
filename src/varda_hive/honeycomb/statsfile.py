@@ -1,3 +1,9 @@
+# Copyright (c) 2026 MeteoSwiss, contributors listed in AUTHORS
+#
+# Distributed under the terms of the BSD 3-Clause License.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 """Stats files: a small YAML or JSON fingerprint of a dataset's values (the format follows
 the file extension), written by `stats-bee dump` and compared by `stats-bee compare`.
 

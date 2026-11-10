@@ -1,3 +1,9 @@
+# Copyright (c) 2026 MeteoSwiss, contributors listed in AUTHORS
+#
+# Distributed under the terms of the BSD 3-Clause License.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 """Example spot-bee source plug-in: reads the "true" values from another
 anemoi zarr dataset (e.g. a trusted copy).
 

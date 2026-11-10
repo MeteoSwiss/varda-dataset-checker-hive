@@ -1,3 +1,9 @@
+# Copyright (c) 2026 MeteoSwiss, contributors listed in AUTHORS
+#
+# Distributed under the terms of the BSD 3-Clause License.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 """spot-bee: compare a seeded sample of (time, variable, grid points)
 against the original source, provided by the dataset's source plug-in."""
 from typing import Iterator
