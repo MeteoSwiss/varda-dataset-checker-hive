@@ -420,12 +420,13 @@ def _compare_sampling(new: dict, ref: dict) -> tuple[list[Finding], bool]:
         findings.append(
             error(
                 f"sampled dates differ from the reference's: {len(only_ref)} missing, {len(only_new)} extra "
-                "(use --dates-from)",
+                "(use --dates-from); sample statistics not compared",
                 details={
                     "missing": only_ref[:20],
                     "extra": only_new[:20]
                 }))
-    return findings, not mismatch
+    # Sample statistics of different samples differ anyway: comparing them would only repeat this.
+    return findings, not (mismatch or only_ref or only_new)
 
 
 def _classify(value: float | None, reference: float | None, atol: float) -> str:

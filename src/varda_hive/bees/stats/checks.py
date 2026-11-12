@@ -267,10 +267,14 @@ def constant_fields(ctx: CheckContext) -> Iterator[Finding]:
     forcings = {v for v, m in ctx.dataset.attrs.get("variables_metadata", {}).items() if m.get("computed_forcing")}
     for name in sample.variables:
         per_date = sample.per_date(name)
-        summaries = list(zip(per_date["mean"], per_date["stdev"], per_date["minimum"], per_date["maximum"]))
+        # Dates without any finite value are reported by finite_values, not as a change.
+        dated = [(d, s) for d, s in zip(
+            sample.dates, zip(per_date["mean"], per_date["stdev"], per_date["minimum"], per_date["maximum"]))
+                 if s[0] is not None]
+        summaries = [s for _, s in dated]
         if len(summaries) < 2:
             continue
-        changed = [d for d, s in zip(sample.dates, summaries) if s != summaries[0]]
+        changed = [d for d, s in dated if s != summaries[0]]
         if name in listed and changed:
             yield error(f"listed as constant field but changes at {len(changed)}/{len(summaries) - 1} dates",
                         variable=name,

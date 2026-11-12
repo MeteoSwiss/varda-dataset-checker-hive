@@ -47,6 +47,14 @@ EXPECTED = {
     # Rolled in space: same statistics over the full domain, but other values on the sampled points.
     # Only found with a point subset (the default n_points), not with `n_points: all`.
     "d-step-shift": {"matches_reference_stats"},
+    # Metadata and additional faults that stats-bee catches as a side effect (most others are meta-bee's).
+    "m-constant-fields": {"constant_fields"},
+    "m-variables-swap": {"matches_reference_stats"},
+    "m-dates-swap": {"matches_reference_stats"},
+    "m-dates-duplicate": {"matches_reference_stats"},
+    "m-missing-dates": {"matches_reference_stats"},  # the listed date is no longer sampled
+    "a-extra-variable": {"matches_reference_stats"},
+    "a-extra-level": {"matches_reference_stats"},
 }
 
 pytestmark = [

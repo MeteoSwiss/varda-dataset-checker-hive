@@ -198,6 +198,14 @@ def test_stats_constant_fields(dataset_path):
     assert (w.variable, w.time) == ("T_850", "2020-03-01T03:00:00")
 
 
+def test_stats_constant_field_all_nan_date_is_not_a_change(dataset_path):
+    """An all-NaN date is a finite_values ERROR, not a change of the constant field FIS."""
+    zarr.open_group(str(dataset_path), mode="r+")["data"][3] = np.nan
+    spec = Spec(sampling={"n_dates": "all"})
+    assert _stats_findings(dataset_path, spec, "constant_fields") == []
+    assert {f.variable for f in _stats_findings(dataset_path, spec, "finite_values")} == set(VARIABLES)
+
+
 def test_stats_constant_field_not_listed(dataset_path):
     attrs = json.loads((dataset_path / ".zattrs").read_text())
     attrs["constant_fields"] = []

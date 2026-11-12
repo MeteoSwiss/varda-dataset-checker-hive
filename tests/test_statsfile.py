@@ -128,7 +128,9 @@ def test_compare_reports_sampling_and_variable_mismatch(dataset_path, tmp_path):
     stats = compute_stats(Dataset(shorter), Spec(sampling={"n_points": 10}), dates_from=reference)
     assert stats["sampling"]["missing_dates"] == reference["sampling"]["dates"][-2:]
     messages = [f.message for f in compare_stats(stats, reference).findings if f.severity == Severity.ERROR]
-    assert "sampled dates differ from the reference's: 2 missing, 0 extra (use --dates-from)" in messages
+    assert ("sampled dates differ from the reference's: 2 missing, 0 extra (use --dates-from); "
+            "sample statistics not compared") in messages
+    assert not any(m.startswith("sample ") for m in messages)  # only the stored statistics are compared
     assert "variable missing (present in reference stats)" in messages
     other_points = compute_stats(Dataset(dataset_path),
                                  Spec(sampling={
