@@ -106,7 +106,8 @@ reference stats file is generated.
    not unusual weather. Variables without a range are listed as INFO.
 
 4. **Choose the sampling.** `n_dates` random dates over the whole time range, `n_points` grid
-   points on each of them (10k–100k, or `all` for the full domain), plus `include_dates` for time
+   points on each of them for mean and stdev (10k–100k, or `all`; min/max and NaN/inf always cover
+   the full domain), plus `include_dates` for time
    indices you always want checked. `all` for both gives an exact full pass, affordable only for
    small datasets. Leave the `tolerances` at their defaults unless a check tells you otherwise.
    Optionally calibrate them for this sampling with `stats-bee calibrate`, see

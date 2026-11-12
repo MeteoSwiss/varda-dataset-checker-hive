@@ -5,8 +5,9 @@ consistent with its data, and that the values are plausible: in physical range, 
 constant fields constant. When a dataset is regenerated, a reference stats file shows what
 changed compared to the last accepted version.
 
-It reads a seeded sample of `n_dates` dates x `n_points` grid points, reduces every field to
-summary statistics per date (mean, stdev, min, max, NaN and inf counts), and checks those. It
+It reads a seeded sample of `n_dates` dates, reduces every field to summary statistics per date
+(min, max, NaN and inf counts over the full domain; mean and stdev on `n_points` grid points),
+and checks those. It
 needs only the dataset, not the original source data: comparing grid-point values with the
 source is spot-bee's job.
 
@@ -44,14 +45,17 @@ It also reads the arrays `data`, `dates`, `mean`, `stdev`, `minimum` and `maximu
 **The sample.** The `n_dates` random dates are drawn stratified (one per equal block) over the
 **whole time range**, plus the `include_dates`, so the value checks also see the dates after the
 statistics window (often the validation and test period). Only the random dates inside the window
-are used to estimate the statistics. On every sampled date, the same `n_points` seeded grid points
-are read (`all` for the full domain).
+are used to estimate the statistics. Every sampled date is read whole, and then summarised:
+- **minimum, maximum, NaN and inf counts over the full domain**, so `physical_ranges`,
+  `finite_values` and the min/max checks see every grid point: a single bad point is found;
+- **mean and stdev on `n_points` seeded grid points**, the same on every date (`all` for the full
+  domain). These are the expensive part, and the estimate tolerates the sampling error.
 
 **Cost.** Every sampled date costs one read of one chunk, which holds all variables and points of
-that time step, so `n_points` does not reduce the I/O, only the time to summarise. On ICH1 1 km
-(0.55 GB per step), a date takes about 0.5 s to read and 0.5 s to summarise over the full domain.
-Choose `n_points` in the 10k–100k range or `all`: localized faults (a NaN point, a local spike)
-are only seen on sampled points.
+that time step, so `n_points` does not reduce the I/O, only the time to summarise. Measured per
+date on 1 km grids (about 120 variables x 1.15M points, 0.55 GB): read 0.4–0.5 s, full-domain
+min/max/NaN/inf 0.07 s, mean/stdev on 100k points 0.15–0.3 s, or on the full domain 0.4–1 s.
+`n_points` in the 10k–100k range is a good default.
 
 ## Stats files
 
@@ -65,11 +69,11 @@ format as the spec), anything else gives JSON.
 | `dataset`, `created`, `generator` | where it comes from |
 | `sampling` | seed, `n_dates`, `n_points`, `include_dates`, grid size, statistics window, and the sampled `dates` (with `random`: the ones inside the window that estimate the statistics) |
 | `stored` | the dataset's stored minimum/maximum/mean/stdev per variable |
-| `sample` | minimum/maximum/mean/stdev of the finite values over all sampled dates x points, and the NaN and inf counts, per variable |
+| `sample` | per variable over all sampled dates: minimum, maximum, NaN and inf counts of the full domain; mean and stdev of the finite values on the sampled points |
 
 Floats are written with `repr`, which round-trips exactly, and NaN and inf are written as `null`.
-The current format is `varda-hive-stats/3`. Files of the older formats, which stored per-date
-summaries, are rejected: regenerate them with `stats-bee dump`.
+The current format is `varda-hive-stats/4`. Files of older formats are rejected: regenerate them
+with `stats-bee dump`.
 
 ### Reference workflow in a dataset repo
 
@@ -178,9 +182,9 @@ ICH1 1 km.
 - **Single-step faults** are only seen on sampled dates: a random sample hits one given step out
   of N with probability n/N. Put the dates you care about in `include_dates`, or use
   `n_dates: all` when a full pass is affordable.
-- **Localized faults** (a single NaN point, a spike on a few points) are only seen on sampled
-  points: with k of G points, one bad point is found with probability k/G per sampled date. Use
-  `n_points: all` for full coverage; it costs CPU, not I/O.
+- **Localized faults** (a single NaN point, a spike on a few points) are found on every sampled
+  date, because min/max and the NaN/inf counts cover the full domain. A subtle local change that
+  stays inside the physical range only shows in mean/stdev, which see k of G points.
 - **A field shifted or rolled in space** keeps its mean/stdev/min/max over the full domain. With a
   point subset it changes the values on the sampled points, so the reference comparison finds it
   (Varda-tiny `d-step-shift`), but not with `n_points: all`. Comparing with the source remains

@@ -48,6 +48,6 @@ def test_dump_writes_valid_json_with_inf(dataset_path, tmp_path):
     out = tmp_path / "s.json"
     assert stats_bee_main(["dump", str(dataset_path), "-o", str(out)]) == 0
     stats = json.loads(out.read_text(), parse_constant=lambda c: (_ for _ in ()).throw(ValueError(c)))
-    assert stats["format"] == "varda-hive-stats/3" and stats["sample"]["T_2M"]["n_inf"] == len(
+    assert stats["format"] == "varda-hive-stats/4" and stats["sample"]["T_2M"]["n_inf"] == len(
         stats["sampling"]["dates"])
     assert stats_bee_main(["check", str(dataset_path), "--select", "finite_values"]) == 1

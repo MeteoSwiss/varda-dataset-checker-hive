@@ -57,13 +57,28 @@ def test_sample_aggregate_is_exact(dataset_path):
     ds = Dataset(dataset_path)
     sample = compute_sample(ds, spec)
     points = sample_points(NG, spec.sampling)
-    values = ds.data[:][sample.time_index][..., points].astype("f8")  # (date, variable, 1, point)
+    full = ds.data[:][sample.time_index].astype("f8")  # (date, variable, 1, grid)
     agg = sample.aggregate()
     for i, name in enumerate(VARIABLES):
-        x = values[:, i].ravel()
+        x = full[:, i, ..., points].ravel()  # mean and stdev: on the sampled points
         assert np.isclose(agg[name]["mean"], x.mean(), rtol=1e-12)
         assert np.isclose(agg[name]["stdev"], x.std(), rtol=1e-9)
-        assert (agg[name]["minimum"], agg[name]["maximum"]) == (x.min(), x.max())
+        # minimum and maximum: over the full domain of the sampled dates
+        assert (agg[name]["minimum"], agg[name]["maximum"]) == (full[:, i].min(), full[:, i].max())
+
+
+def test_extremes_and_counts_cover_points_outside_the_subset(dataset_path):
+    """A spike or a NaN on a single grid point that is not sampled is still found."""
+    spec = Spec(sampling={"n_dates": 1, "n_points": 10, "include_dates": [6]})
+    outside = int(np.setdiff1d(np.arange(NG), sample_points(NG, spec.sampling))[0])
+    data = zarr.open_group(str(dataset_path), mode="r+")["data"]
+    data[6, 1, 0, outside] = 400.0  # T_2M spike
+    data[6, 3, 0, outside] = np.nan  # U_10M NaN
+    sample = compute_sample(Dataset(dataset_path), spec)
+    k = sample.time_index.index(6)
+    assert sample.per_date("T_2M")["maximum"][k] == 400.0
+    assert sample.per_date("U_10M")["n_nan"][k] == 1
+    assert sample.per_date("U_10M")["n_finite"][k] == 10  # the moments only see the sampled points
 
 
 def test_full_pass_recomputes_stored_statistics(dataset_path):

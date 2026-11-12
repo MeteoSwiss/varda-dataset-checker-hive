@@ -27,7 +27,7 @@ ranges_file: physical_ranges.yaml
 sampling:
   seed: 0
   n_dates: 20           # random dates over the whole time range, or "all"
-  n_points: 10000       # grid points per date (the same on every date), or "all" for the full domain
+  n_points: 10000       # grid points for mean/stdev per date (min/max/NaN always full domain), or "all"
   include_dates: []     # time indices always checked in addition
 
 tolerances:

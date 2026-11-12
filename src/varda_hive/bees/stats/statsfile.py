@@ -7,15 +7,18 @@
 dataset (the format follows the file extension), written by `stats-bee dump` and compared by
 `stats-bee compare`.
 
-The sample is `n_dates` seeded dates, stratified over the whole time range (plus `include_dates`),
-times `n_points` seeded grid points, the same points on every date. Per date, every variable is
-reduced to mean, stdev, minimum and maximum of its finite values and the NaN and inf counts. These
-per-date summaries live in memory only (`Sample`): the checks use them, the stats file does not.
+The sample is `n_dates` seeded dates, stratified over the whole time range (plus `include_dates`).
+Every sampled date is read whole (one chunk), so per date and variable:
+- minimum, maximum and the NaN and inf counts cover the **full domain**: cheap, and a single bad
+  point is never missed;
+- mean and stdev of the finite values cover `n_points` seeded grid points, the same on every date
+  (the costly part).
+These per-date summaries live in memory only (`Sample`): the checks use them, the stats file does not.
 
 A stats file holds, per variable:
 - `stored`: the statistics stored in the dataset (minimum, maximum, mean, stdev)
-- `sample`: minimum, maximum, mean and stdev of the finite values over all sampled dates x points,
-  and the NaN and inf counts
+- `sample`: over all sampled dates, minimum, maximum, NaN and inf counts of the full domain, and
+  mean and stdev of the finite values on the sampled points
 
 Its size depends only on the number of variables (and the list of sampled dates in `sampling`),
 not on the size of the dataset. Two stats files of the same sample (same seed, points and dates,
@@ -39,9 +42,11 @@ from ...honeycomb import Dataset, Finding, Spec, error, info, warning
 from ...honeycomb.dataset import STATISTICS
 from ...honeycomb.sampling import random_time_indices, sample_points
 
-FORMAT = "varda-hive-stats/3"
-SUMMARY = ("mean", "stdev", "minimum", "maximum", "n_nan", "n_inf")  # per-date summary of one variable
-COUNTS = ("n_nan", "n_inf")
+FORMAT = "varda-hive-stats/4"
+# Per-date summary of one variable: mean/stdev (and n_finite, their weight) on the sampled points,
+# minimum/maximum and the NaN/inf counts on the full domain.
+SUMMARY = ("mean", "stdev", "minimum", "maximum", "n_nan", "n_inf", "n_finite")
+COUNTS = ("n_nan", "n_inf", "n_finite")
 SAMPLE_STATS = ("minimum", "maximum", "mean", "stdev", "n_nan", "n_inf")
 N_BOOTSTRAP = 200
 
@@ -69,7 +74,7 @@ class Sample:  # pylint: disable=too-many-instance-attributes
     # `include_dates` would bias the estimate.
     random: np.ndarray
     summary: np.ndarray  # (date, variable, SUMMARY), float64
-    points_per_date: int  # values per variable and date (sampled points x ensemble members)
+    points_per_date: int  # values per variable and date for mean/stdev (sampled points x ensemble members)
     values_per_date: int  # the same for the full domain
     n_window: int  # dates in the statistics window, without the missing dates
     missing: list[str]  # requested dates (`--dates-from`, `include_dates`) that could not be sampled
@@ -89,11 +94,10 @@ class Sample:  # pylint: disable=too-many-instance-attributes
         }
 
     def aggregate(self) -> dict[str, dict[str, Any]]:
-        """Minimum, maximum, mean and stdev of the finite values over all sampled dates x points, and
-        the NaN and inf counts. Exact from the per-date summaries: the mean and the pooled variance are
-        weighted by the number of finite values of each date."""
-        m, s, lo, hi, n_nan, n_inf = (self.summary[:, :, j] for j in range(len(SUMMARY)))
-        weight = self.points_per_date - n_nan - n_inf  # finite values per date
+        """Over all sampled dates: minimum, maximum and NaN/inf counts of the full domain, and mean and
+        stdev of the finite values on the sampled points. Exact from the per-date summaries: the mean
+        and the pooled variance are weighted by the number of finite sampled values of each date."""
+        m, s, lo, hi, n_nan, n_inf, weight = (self.summary[:, :, j] for j in range(len(SUMMARY)))
         total = weight.sum(axis=0)
         with warnings.catch_warnings(), np.errstate(invalid="ignore", divide="ignore"):
             warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN variables give NaN
@@ -157,7 +161,7 @@ def compute_sample(ds: Dataset, spec: Spec, dates_from: dict | None = None) -> S
     summary = np.full((len(indices), len(ds.variables), len(SUMMARY)), np.nan)
     for k, t in enumerate(indices):
         step = ds.step(t)
-        summary[k] = summarise(step if len(points) == n_grid else step[..., points])
+        summary[k] = summarise(step, None if len(points) == n_grid else points)
     window = statistics_window(ds)
     n_members = int(np.prod(ds.data.shape[2:-1]))
     stored = {s: ds.statistic(s) for s in STATISTICS if s in ds.arrays}  # one read per array
@@ -182,21 +186,31 @@ def compute_sample(ds: Dataset, spec: Spec, dates_from: dict | None = None) -> S
     )
 
 
-def summarise(step: np.ndarray) -> np.ndarray:
-    """(variable, ...) -> (variable, SUMMARY) in float64: mean, stdev, minimum and maximum of the
-    finite values, and the NaN and inf counts. An inf must not turn the summaries into inf/NaN.
+def summarise(step: np.ndarray, points: np.ndarray | None = None) -> np.ndarray:
+    """(variable, ..., grid) -> (variable, SUMMARY) in float64.
 
-    Fast path for the usual all-finite variable: reductions on the stored dtype with a float64
-    accumulator, no float64 copy of the field."""
+    Minimum, maximum and the NaN and inf counts over the full domain; mean and stdev of the finite
+    values (and their number, `n_finite`) on the grid `points`, all points if None. An inf must not
+    turn the summaries into inf/NaN. No float64 copy of the field: reductions on the stored dtype,
+    with a float64 accumulator for mean and stdev."""
     x = step.reshape(step.shape[0], -1)
+    sub = x if points is None else step[..., points].reshape(step.shape[0], -1)
     out = np.full((x.shape[0], len(SUMMARY)), np.nan)
-    finite = np.isfinite(x)
-    out[:, 4] = np.isnan(x).sum(axis=1)
-    out[:, 5] = (~finite).sum(axis=1) - out[:, 4]
     for i in range(x.shape[0]):
-        values = x[i] if out[i, 4] + out[i, 5] == 0 else x[i][finite[i]]
+        finite = np.isfinite(x[i])
+        n_finite = int(np.count_nonzero(finite))
+        n_nan = int(np.count_nonzero(np.isnan(x[i])))
+        out[i, 4:6] = n_nan, x[i].size - n_finite - n_nan
+        values = x[i] if n_finite == x[i].size else x[i][finite]
         if values.size:
-            out[i, :4] = (values.mean(dtype="f8"), values.std(dtype="f8"), values.min(), values.max())
+            out[i, 2:4] = values.min(), values.max()
+        if points is not None:
+            finite = np.isfinite(sub[i])
+            n_finite = int(np.count_nonzero(finite))
+            values = sub[i] if n_finite == sub[i].size else sub[i][finite]
+        out[i, 6] = n_finite
+        if values.size:
+            out[i, :2] = values.mean(dtype="f8"), values.std(dtype="f8")
     return out
 
 
@@ -220,7 +234,16 @@ def estimate(  # pylint: disable=too-many-locals
     m, s, lo, hi = (summary[:, :, j] for j in range(4))
     fpc = math.sqrt(max(0.0, 1 - n / n_window)) if n_window else 0.0
     exact = n == n_window and full_domain
-    out: dict[str, dict[str, Any]] = {name: {"n_dates": n, "exact": exact, "fpc": fpc} for name in variables}
+    out: dict[str, dict[str, Any]] = {
+        # minimum/maximum are summarised over the full domain: exact as soon as every date was read
+        name: {
+            "n_dates": n,
+            "exact": exact,
+            "exact_extremes": n == n_window,
+            "fpc": fpc
+        }
+        for name in variables
+    }
     if n == 0:
         return out
     with warnings.catch_warnings():

@@ -55,6 +55,7 @@ EXPECTED = {
     "m-missing-dates": {"matches_reference_stats"},  # the listed date is no longer sampled
     "a-extra-variable": {"matches_reference_stats"},
     "a-extra-level": {"matches_reference_stats"},
+    "x-meta-data": {"statistics_consistent", "physical_ranges", "matches_reference_stats"},
 }
 
 pytestmark = [

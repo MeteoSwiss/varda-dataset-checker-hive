@@ -29,7 +29,8 @@ class Sampling(_Strict):
     # Random time indices, or "all" for a full pass (exact statistics, but reads every step).
     n_dates: int | Literal["all"] = 5
     # Grid points per date, the same points on every date, or "all" for the full domain. stats-bee
-    # summarises them per date; spot-bee compares them with the source.
+    # computes mean/stdev on them (min/max and NaN/inf always cover the full domain); spot-bee
+    # compares them with the source.
     n_points: int | Literal["all"] = 1000
     # Time indices always included in the sample, in addition to the random ones.
     include_dates: list[int] = Field(default_factory=list)

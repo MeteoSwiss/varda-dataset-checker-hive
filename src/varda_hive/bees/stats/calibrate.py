@@ -73,7 +73,7 @@ def calibrate(  # pylint: disable=too-many-locals
     for k, t in enumerate(dates):
         step = ds.step(t)
         full[k] = summarise(step)[:, :2]
-        sub[k] = full[k] if full_domain else summarise(step[..., points])[:, :2]
+        sub[k] = full[k] if full_domain else summarise(step, points)[:, :2]
 
     def estimates(m: np.ndarray, s: np.ndarray, axis: int) -> tuple[np.ndarray, np.ndarray]:
         return m.mean(axis=axis), np.sqrt((s**2).mean(axis=axis) + m.var(axis=axis))

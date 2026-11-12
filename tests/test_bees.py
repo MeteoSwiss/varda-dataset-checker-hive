@@ -14,8 +14,9 @@ import zarr
 from varda_hive.cli import hive_main, meta_bee_main, stats_bee_main
 from varda_hive.honeycomb import CheckContext, Dataset, Severity, Spec, load_spec, run
 from varda_hive.bees.stats.statsfile import compute_stats, save_stats
+from varda_hive.honeycomb.sampling import sample_points
 
-from conftest import NT, VARIABLES, build_dataset
+from conftest import NG, NT, VARIABLES, build_dataset
 
 TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
 
@@ -174,6 +175,20 @@ def test_stats_statistics_consistent_exact(dataset_path):
     zarr.open_group(str(dataset_path), mode="r+")["mean"][1] *= 1.0001  # far below any sampling error
     [f] = _stats_findings(dataset_path, spec, "statistics_consistent")
     assert f.variable == "T_2M" and f.details["exact"]
+
+
+def test_stats_spike_outside_the_point_subset(dataset_path, write_spec):
+    write_spec("T_2M: {min: 200.0, max: 330.0, units: K}\n", name="ranges.yaml")
+    spec = load_spec(write_spec("ranges_file: ranges.yaml\nsampling: {n_dates: 1, n_points: 5, include_dates: [6]}\n"))
+    outside = int(np.setdiff1d(np.arange(NG), sample_points(NG, spec.sampling))[0])
+    data = zarr.open_group(str(dataset_path), mode="r+")["data"]
+    data[6, 1, 0, outside] = 400.0
+    data[6, 2, 0, outside] = np.inf
+    found = {(f.check, f.variable, f.time) for f in _errors(dataset_path, "stats", spec)}
+    assert {("physical_ranges", "T_2M", "2020-03-01T06:00:00"),
+            ("finite_values", "T_850", "2020-03-01T06:00:00")} <= found
+    # the stored maximum doesn't include the spike either
+    assert ("statistics_consistent", "T_2M", None) in found
 
 
 def test_stats_physical_ranges(dataset_path, write_spec):

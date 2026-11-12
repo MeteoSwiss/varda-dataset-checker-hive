@@ -32,7 +32,8 @@ def statistics_consistent(ctx: CheckContext) -> Iterator[Finding]:
     """Stored mean/stdev/min/max are self-consistent and match the sample within the sampling error.
 
     Self-consistent: no NaN, min <= mean <= max, stdev 0 exactly when min == max. A sample can
-    only bound min/max; with `n_dates: all` and `n_points: all` everything is compared exactly.
+    only bound min/max, exact with `n_dates: all`; mean and stdev are exact with `n_dates: all` and
+    `n_points: all`.
     With `calibrated_tolerances` in the spec, mean and stdev use the calibrated tolerances.
     """
     sample = _sample(ctx)
@@ -101,9 +102,10 @@ def _compare_moments(ctx: CheckContext, name: str, stored: dict[str, float], rec
 
 
 def _compare_extremes(ctx: CheckContext, name: str, lo: float, hi: float, rec: dict) -> Iterator[Finding]:
-    """A sample can only bound the minimum and maximum, unless every date and point was read."""
+    """A sample of dates can only bound the minimum and maximum, unless every date was read: they are
+    summarised over the full domain of each date."""
     slack = ctx.spec.tolerances.statistics_rtol * max(abs(lo), abs(hi))
-    exact = rec["exact"]
+    exact = rec["exact_extremes"]
     if rec["minimum"] < lo - slack or (exact and rec["minimum"] > lo + slack):
         yield error(f"stored minimum {lo:.6g} but the sample reaches {rec['minimum']:.6g}",
                     variable=name,
@@ -287,9 +289,9 @@ def constant_fields(ctx: CheckContext) -> Iterator[Finding]:
         # A whole field set to one value (e.g. zeroed), unless the variable is constant anyway.
         stored = sample.stored[name]
         if name not in forcings and stored.get("minimum") != stored.get("maximum"):
-            for date, sd, value in zip(sample.dates, per_date["stdev"], per_date["mean"]):
-                if sd == 0:
-                    yield warning(f"spatially constant field (all values {value})", variable=name, time=date)
+            for date, vmin, vmax in zip(sample.dates, per_date["minimum"], per_date["maximum"]):
+                if vmin is not None and vmin == vmax:  # over the full domain
+                    yield warning(f"spatially constant field (all values {vmin})", variable=name, time=date)
 
 
 @check("stats")
