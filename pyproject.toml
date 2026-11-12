@@ -1,39 +1,53 @@
 [project]
-dynamic = ["version"]
-name = "open-source-template"
-description = "A demo for the OSS template at MeteoSwiss."
+name = "varda-dataset-checker-hive"
+version = "0.1.0"
+description = "A hive of slim bees that check anemoi datasets for faults: metadata, statistics and spot-checks against the source."
 license = "BSD-3-Clause"
-readme = "README.rst"
-authors = [{ name = "PXF", email = "f_python@meteoswiss.ch" }]
-requires-python = ">=3.11,<3.14"
+readme = "README.md"
+authors = [{ name = "Daniel Hupp", email = "daniel.hupp@meteoswiss.ch" }]
+requires-python = ">=3.12"
 dependencies = [
+    "numpy",
+    "pydantic>=2",
+    "pyyaml",
+    "zarr>=2.18,<3",
 ]
+
+[project.optional-dependencies]
+anemoi = ["anemoi-datasets>=0.5.42"]
+
+[project.scripts]
+hive = "varda_hive.cli:hive_main"
+meta-bee = "varda_hive.cli:meta_bee_main"
+stats-bee = "varda_hive.cli:stats_bee_main"
+spot-bee = "varda_hive.cli:spot_bee_main"
 
 [dependency-groups]
 test = [
-    "pytest (>=8.4.2,<9.0.0)",
-    "pytest-cov (>=7.0.0,<8.0.0)"
+    "pytest>=8",
+    "pytest-cov>=7",
 ]
 lint = [
-    "mypy (>=1.18.1,<2.0.0)",
-    "pylint (>=3.3.8,<4.0.0)",
-    "yapf (>=0.43.0,<0.44.0)"
-]
-doc = [
-    "pydata-sphinx-theme (>=0.16.1,<0.17.0)",
-    "sphinx (>=8.2.3,<9.0.0)",
-    "sphinx-autoapi (>=3.6.0,<4.0.0)"
+    "mypy>=1.18",
+    "pylint>=3.3",
+    "yapf>=0.43",
 ]
 dev = [
     { include-group = "test" },
     { include-group = "lint" },
-    { include-group = "doc" }
 ]
 
-[tool.poetry]
-requires-poetry = ">=2.0,<3.0"
-version = "0.0.0"  # DO NOT SET. The version of the package is always set by the CI/CD pipeline.
-include = ["CHANGELOG.rst"]
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/varda_hive"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not faulty'"
+markers = ["faulty: runs on the Varda-tiny faulty datasets on /scratch (skipped when missing)"]
 
 [tool.yapf]
 based_on_style = "pep8"
@@ -63,10 +77,5 @@ min-public-methods = 0
 ignore_missing_imports = true
 disallow_untyped_defs = true
 
-
 [tool.coverage.run]
-omit = ["test/**",  "doc/**"]
-
-[build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
-build-backend = "poetry.core.masonry.api"
+omit = ["tests/**"]

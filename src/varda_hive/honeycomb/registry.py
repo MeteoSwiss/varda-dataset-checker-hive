@@ -1,0 +1,118 @@
+# Copyright (c) 2026 MeteoSwiss, contributors listed in AUTHORS
+#
+# Distributed under the terms of the BSD 3-Clause License.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+"""Check registration and the runner shared by all bees.
+
+A check is a function `fn(ctx: CheckContext) -> Iterable[Finding]`,
+registered with `@check("meta")`. The runner fills in bee/check names on the
+findings and turns a crashing check into an ERROR finding, so one broken
+check never hides the results of the others.
+"""
+from dataclasses import dataclass, field, replace
+import importlib
+import traceback
+from typing import Callable, Iterable
+
+from .dataset import Dataset
+from .findings import Finding, Report, Severity, error
+from .spec import Spec
+
+BEES = ("meta", "stats", "spot")
+
+
+@dataclass
+class CheckContext:
+    dataset: Dataset
+    spec: Spec
+    reference: Dataset | None = None
+    cache: dict = field(default_factory=dict)  # shared between checks of one run, e.g. a loaded source
+
+
+CheckFn = Callable[[CheckContext], Iterable[Finding]]
+
+
+@dataclass(frozen=True)
+class CheckInfo:
+    bee: str
+    name: str
+    fn: CheckFn
+    description: str
+
+
+_REGISTRY: dict[str, dict[str, CheckInfo]] = {bee: {} for bee in BEES}
+
+
+def check(bee: str, name: str | None = None) -> Callable[[CheckFn], CheckFn]:
+    if bee not in _REGISTRY:
+        raise ValueError(f"unknown bee {bee!r}, expected one of {BEES}")
+
+    def register(fn: CheckFn) -> CheckFn:
+        check_name = name or fn.__name__
+        doc = (fn.__doc__ or "").strip()
+        _REGISTRY[bee][check_name] = CheckInfo(bee, check_name, fn, doc.splitlines()[0] if doc else "")
+        return fn
+
+    return register
+
+
+def checks_for(bee: str) -> list[CheckInfo]:
+    _load_bees()
+    return list(_REGISTRY[bee].values())
+
+
+def run(ctx: CheckContext, bees: Iterable[str] = BEES, select: Iterable[str] | None = None) -> Report:
+    """Run all checks of `bees`, or only those in `select` ("check" or "bee.check").
+
+    Raises ValueError for a name in `select` that matches no check of `bees`: a typo must not turn
+    into a run of zero checks that passes.
+    """
+    bees = list(bees)
+    selected = _resolve_select(bees, select)
+    report = Report(dataset=str(ctx.dataset.path))
+    for bee in bees:
+        for info in checks_for(bee):
+            if selected is not None and (bee, info.name) not in selected:
+                continue
+            try:
+                findings = [_apply_ignore(f, ctx.spec.ignore_warnings.get(info.name)) for f in info.fn(ctx)]
+            # Reported, not swallowed.
+            except Exception as e:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+                findings = [
+                    error(f"check crashed: {type(e).__name__}: {e}", details={"traceback": traceback.format_exc()})
+                ]
+            report.add(bee, info.name, findings)
+    return report
+
+
+def _resolve_select(bees: list[str], select: Iterable[str] | None) -> set[tuple[str, str]] | None:
+    if not select:
+        return None
+    available = {(bee, c.name) for bee in bees for c in checks_for(bee)}
+    selected, unknown = set(), []
+    for name in select:
+        bee, _, check_name = name.rpartition(".")
+        matches = {(b, c) for b, c in available if c == check_name and bee in ("", b)}
+        if not matches:
+            unknown.append(name)
+        selected |= matches
+    if unknown:
+        valid = ", ".join(sorted(f"{b}.{c}" for b, c in available))
+        raise ValueError(f"unknown check(s) {', '.join(unknown)}; available: {valid}")
+    return selected
+
+
+def _apply_ignore(finding: Finding, variables: list[str] | None) -> Finding:
+    """Demote a WARNING the spec lists in `ignore_warnings` to INFO."""
+    if finding.severity != Severity.WARNING or not variables:
+        return finding
+    if "*" in variables or finding.variable in variables:
+        return replace(finding, severity=Severity.INFO, message=f"{finding.message} (ignored by spec)")
+    return finding
+
+
+def _load_bees() -> None:
+    # Importing the bee packages registers their checks. Imported by name, at call time, because
+    # the bees import the honeycomb themselves.
+    importlib.import_module("..bees", __package__)

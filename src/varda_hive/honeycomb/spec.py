@@ -1,0 +1,114 @@
+# Copyright (c) 2026 MeteoSwiss, contributors listed in AUTHORS
+#
+# Distributed under the terms of the BSD 3-Clause License.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+"""The per-dataset spec: what a dataset is expected to look like and where
+its source data lives. Specs live in the dataset's own repo; see
+templates/spec.example.yaml.
+
+Every field is optional, so a spec can start small. Checks that need an
+unset field skip themselves with an INFO finding.
+"""
+from datetime import datetime
+import math
+from pathlib import Path
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+import yaml
+
+
+class _Strict(BaseModel):
+    # Typos in a spec should fail loudly, not silently disable a check.
+    model_config = ConfigDict(extra="forbid")
+
+
+class Sampling(_Strict):
+    seed: int = 0
+    # Random time indices, or "all" for a full pass (exact statistics, but reads every step).
+    n_dates: int | Literal["all"] = 5
+    # Grid points per date, the same points on every date, or "all" for the full domain. stats-bee
+    # computes mean/stdev on them (min/max and NaN/inf always cover the full domain); spot-bee
+    # compares them with the source.
+    n_points: int | Literal["all"] = 1000
+    # Time indices always included in the sample, in addition to the random ones.
+    include_dates: list[int] = Field(default_factory=list)
+
+
+class Tolerances(_Strict):
+    # Recomputed vs stored statistics: allowed |diff| = z_threshold * SE + statistics_rtol * (|stored| + stdev),
+    # where SE is the sampling error of the recomputed value (0 for a full pass).
+    statistics_rtol: float = 1e-5
+    z_threshold: float = 5.0
+    # Stats file vs reference stats file: |diff| <= compare_atol_stdev * stdev of the variable is
+    # reported as "close" instead of "differs". 0 means only bitwise identical values pass.
+    compare_atol_stdev: float = 0.0
+    source_rtol: float = 1e-4
+    source_atol: float = 1e-4
+
+
+class SourceSpec(_Strict):
+    # "package.module:Class" or "path/to/file.py:Class" (relative to the spec file)
+    plugin: str
+    args: dict[str, Any] = Field(default_factory=dict)
+
+
+class PhysicalRange(_Strict):
+    """One entry of a `ranges_file`."""
+    min: float = -math.inf
+    max: float = math.inf
+    units: str = ""
+
+
+def load_ranges(path: Path) -> dict[str, PhysicalRange]:
+    """Read and validate a `ranges_file`: {variable: {min, max, units}}, unknown keys rejected."""
+    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path}: expected a mapping of variable -> {{min, max, units}}")
+    return {str(name): PhysicalRange(**(bounds or {})) for name, bounds in raw.items()}
+
+
+class Spec(_Strict):
+    name: str | None = None
+    variables: list[str] | None = None
+    start_date: datetime | None = None
+    end_date: datetime | None = None
+    frequency: str | None = None
+    grid_points: int | None = None
+    constant_fields: list[str] | None = None
+    ranges_file: Path | None = None
+    # Stats file (written by `stats-bee dump`) to compare against, e.g. committed in the dataset repo.
+    reference_stats: Path | None = None
+    # Tolerance file (written by `stats-bee calibrate`) for statistics_consistent.
+    calibrated_tolerances: Path | None = None
+    sampling: Sampling = Field(default_factory=Sampling)
+    tolerances: Tolerances = Field(default_factory=Tolerances)
+    source: SourceSpec | None = None
+    # Known, accepted warnings, demoted to INFO: {check name: [variables]}, "*" for all variables.
+    # E.g. {statistics_consistent: [insolation]} for a diurnal field the sample cannot resolve.
+    ignore_warnings: dict[str, list[str]] = Field(default_factory=dict)
+    # Directory of the spec file; relative paths in the spec resolve against it.
+    base_dir: Path = Field(default_factory=Path.cwd, exclude=True)
+
+
+def load_spec(path: str | Path | None) -> Spec:
+    """Load and validate a spec. Files it names must exist, and the ranges file must be valid, so a
+    misconfigured spec fails here (CLI exit code 2) instead of in every check."""
+    if path is None:
+        return Spec()
+    path = Path(path)
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    spec = Spec(**raw, base_dir=path.resolve().parent)
+    for key in ("ranges_file", "reference_stats", "calibrated_tolerances"):
+        value = getattr(spec, key)
+        if value is None:
+            continue
+        if not value.is_absolute():
+            value = spec.base_dir / value
+            setattr(spec, key, value)
+        if not value.is_file():
+            raise FileNotFoundError(f"{path}: {key} not found: {value}")
+    if spec.ranges_file is not None:
+        load_ranges(spec.ranges_file)
+    return spec
