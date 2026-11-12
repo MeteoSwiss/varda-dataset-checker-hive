@@ -74,7 +74,8 @@ def test_stats_missing_dates_are_not_sampled(dataset_path):
     spec = Spec(sampling={"n_dates": "all", "include_dates": [3]})
     assert Dataset(dataset_path).missing_indices == {3, 5}
     stats = compute_stats(Dataset(dataset_path), spec)
-    assert 3 not in stats["time_index"] and 5 not in stats["time_index"]
+    assert "2020-03-01T03:00:00" not in stats["sampling"]["dates"]
+    assert "2020-03-01T05:00:00" not in stats["sampling"]["dates"]
     assert stats["sampling"]["n_window"] == NT - 2 and stats["sampling"]["missing_dates"] == ["2020-03-01T03:00:00"]
     for seed in range(5):
         spec = Spec(sampling={"n_dates": 4, "seed": seed})

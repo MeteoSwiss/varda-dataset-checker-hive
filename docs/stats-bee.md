@@ -5,23 +5,25 @@ consistent with its data, and that the values are plausible: in physical range, 
 constant fields constant. When a dataset is regenerated, a reference stats file shows what
 changed compared to the last accepted version.
 
-On a seeded sample of dates, it reduces every field to summary statistics (mean, stdev, min,
-max, NaN count) and checks those. It needs only the dataset, not the original source data:
-comparing grid-point values with the source is spot-bee's job.
+It reads a seeded sample of `n_dates` dates x `n_points` grid points, reduces every field to
+summary statistics per date (mean, stdev, min, max, NaN and inf counts), and checks those. It
+needs only the dataset, not the original source data: comparing grid-point values with the
+source is spot-bee's job.
 
 | check | what | severity |
 |---|---|---|
-| `statistics_consistent` | stored mean/stdev/min/max are self-consistent (no NaN, min <= mean <= max, stdev 0 exactly when min == max) and match the ones recomputed from the sampled dates | ERROR / WARNING, see [tolerances](#how-the-tolerances-work) |
+| `statistics_consistent` | stored mean/stdev/min/max are self-consistent (no NaN, min <= mean <= max, stdev 0 exactly when min == max) and match the ones recomputed from the sample | ERROR / WARNING, see [tolerances](#how-the-tolerances-work) |
 | `physical_ranges` | per-date and stored min/max inside the ranges of the spec's `ranges_file` | ERROR |
-| `finite_values` | no inf on the sampled dates, and no NaN unless the dataset sets `allow_nans` | ERROR |
+| `finite_values` | no inf on the sampled dates and points, and no NaN unless the dataset sets `allow_nans` | ERROR |
 | `statistics_window_valid` | `statistics_start_date` <= `statistics_end_date`, both within the dataset's dates | ERROR / WARNING if missing |
 | `constant_fields` | fields in `constant_fields` don't change between dates (ERROR); other fields aren't identical on all dates, or uniform in space on one date (WARNING, computed forcings exempt) | ERROR / WARNING |
-| `matches_reference_stats` | stored statistics and per-date values match the spec's `reference_stats`, on the reference's dates, see [stats files](#stats-files) | ERROR / WARNING |
+| `matches_reference_stats` | stored and sample statistics match the spec's `reference_stats`, on the reference's sample, see [stats files](#stats-files) | ERROR / WARNING |
 
 ```bash
 uv run stats-bee check <dataset.zarr> --spec <spec.yaml>            # run the checks
 uv run stats-bee dump <dataset.zarr> --spec <spec.yaml> -o out.yaml  # write a stats file
 uv run stats-bee compare out.yaml reference.yaml                     # compare two stats files
+uv run stats-bee calibrate <dataset.zarr> --spec <spec.yaml> -o tol.yaml  # calibrated tolerances
 ```
 
 `--help` on each command lists the options. This page explains the concepts behind them.
@@ -37,26 +39,37 @@ what is on disk. It reads the `.zattrs` keys that anemoi writes:
 - `constant_fields`
 - `variables_metadata[...].computed_forcing`
 
-It also reads the arrays `data`, `dates`, `mean`, `stdev`, `minimum` and `maximum`. Every sampled
-date costs one read of one chunk, which holds all variables of that time step.
+It also reads the arrays `data`, `dates`, `mean`, `stdev`, `minimum` and `maximum`.
+
+**The sample.** The `n_dates` random dates are drawn stratified (one per equal block) over the
+**whole time range**, plus the `include_dates`, so the value checks also see the dates after the
+statistics window (often the validation and test period). Only the random dates inside the window
+are used to estimate the statistics. On every sampled date, the same `n_points` seeded grid points
+are read (`all` for the full domain).
+
+**Cost.** Every sampled date costs one read of one chunk, which holds all variables and points of
+that time step, so `n_points` does not reduce the I/O, only the time to summarise. On ICH1 1 km
+(0.55 GB per step), a date takes about 0.5 s to read and 0.5 s to summarise over the full domain.
+Choose `n_points` in the 10k–100k range or `all`: localized faults (a NaN point, a local spike)
+are only seen on sampled points.
 
 ## Stats files
 
-A stats file is a small fingerprint of a dataset's values on a seeded sample of dates. Its
-format follows the extension: `.yaml`/`.yml` gives YAML (recommended, the same format as the
-spec), anything else gives JSON.
+A stats file is a small fingerprint of a dataset's values on its seeded sample. Its size depends
+only on the number of variables (and the list of sampled dates), not on the size of the dataset or
+of the sample. Its format follows the extension: `.yaml`/`.yml` gives YAML (recommended, the same
+format as the spec), anything else gives JSON.
 
 | key | content |
 |---|---|
 | `dataset`, `created`, `generator` | where it comes from |
-| `sampling` | seed, `n_dates`, `include_dates`, statistics window, dates of `--dates-from` missing in the dataset |
-| `dates`, `time_index`, `random` | the sampled dates; `random` marks the ones used to estimate the statistics |
-| `stored` | the dataset's stored mean/stdev/minimum/maximum per variable |
-| `per_date` | mean/stdev/minimum/maximum of the finite values, and n_nan/n_inf, per variable, one list entry per date |
-| `recomputed` | statistics estimated from the random dates, with their standard errors `se_mean`/`se_stdev` |
+| `sampling` | seed, `n_dates`, `n_points`, `include_dates`, grid size, statistics window, and the sampled `dates` (with `random`: the ones inside the window that estimate the statistics) |
+| `stored` | the dataset's stored minimum/maximum/mean/stdev per variable |
+| `sample` | minimum/maximum/mean/stdev of the finite values over all sampled dates x points, and the NaN and inf counts, per variable |
 
 Floats are written with `repr`, which round-trips exactly, and NaN and inf are written as `null`.
-The current format is `varda-hive-stats/2`, which added `n_inf`. Format 1 files still load and compare.
+The current format is `varda-hive-stats/3`. Files of the older formats, which stored per-date
+summaries, are rejected: regenerate them with `stats-bee dump`.
 
 ### Reference workflow in a dataset repo
 
@@ -87,8 +100,11 @@ uv run stats-bee compare new.stats.yaml checks/<dataset>.stats.yaml   # exit 1 i
 ```
 
 `--dates-from` samples exactly the reference's dates. Dates are matched by value, so a dataset
-with extra or missing time steps still lines up. The comparison is then cell by cell and needs
-no statistics. Each value is:
+with extra or missing time steps still lines up. The points follow from the seed, so the grid,
+`seed` and `n_points` must match the reference's (not checked for `n_points: all`). The comparison is
+then cell by cell, `stored` and `sample` statistics of every variable, and needs no statistics.
+A fault on one sampled date changes the sample statistics, so it is found exactly, but the finding
+names the variable and statistic, not the date. Each value is:
 - *identical*: bitwise equal
 - *close*: within `compare_atol_stdev` x the variable's stdev (default 0, i.e. off). The tolerance
   is scaled by stdev rather than by the value, because relative tolerances break for fields near
@@ -101,34 +117,74 @@ With `reference_stats` in the spec, `stats-bee check` (and `hive`) run the same 
 ## How the tolerances work
 
 `statistics_consistent` compares the stored statistics with statistics recomputed from a
-sample, so the tolerance has to cover the sampling error. The dates are the sampling unit,
-because grid points within one time step are strongly correlated. They are drawn stratified
-(one per equal block) over the statistics window.
+sample, so the tolerance has to cover the sampling error. Two parts contribute:
+- **dates**: the dates are the sampling unit, because grid points within one time step are
+  strongly correlated. They are drawn stratified over the time range; the ones inside the
+  statistics window estimate the statistics.
+- **points**: the point subset is the same on every date, so its error does not average out over
+  the dates. It is a fixed bias of the sample, zero for `n_points: all`.
 
+Default tolerances:
 - **ERROR**: the mean is off by more than `z_threshold` x a distribution-free bound on its
-  sampling error: stdev x sqrt(1 - n/N) / sqrt(n). The per-date means can't spread more than the
-  variable itself, so this bound always holds, and the check is very unlikely to fire by chance.
-- **WARNING**: the mean or stdev is off by more than `z_threshold` x the standard error estimated
-  from the sample itself. That estimate is analytic for the mean and a bootstrap over the dates
-  for the stdev. It is much tighter, but a skewed sample can fool it. On Varda-tiny, 16 of 20
-  random dates fell at night, and the mean of insolation looked inconsistent.
+  sampling error: stdev x (sqrt(1 - n/N) / sqrt(n) + sqrt(1 - k/G) / sqrt(k)), for n of N dates
+  and k of G points. The per-date means can't spread more than the variable itself, so this bound
+  always holds, and the check is very unlikely to fire by chance. It is loose, because stdev
+  includes the spatial variance, while the error from sampling dates depends only on how much the
+  domain mean varies in time.
+- **WARNING**: the mean or stdev is off by more than `z_threshold` x (the standard error estimated
+  from the sample itself + the point term). The estimate is analytic for the mean and a bootstrap
+  over the dates for the stdev. It is tighter, but a skewed sample can fool it. On Varda-tiny, 16
+  of 20 random dates fell at night, and the mean of insolation looked inconsistent.
 - **Minimum and maximum** can only be bounded by a sample: a sampled value below the stored
   minimum or above the stored maximum is an ERROR. Exact checks without a tolerance also apply:
   min <= mean <= max, and stdev is 0 exactly when min == max.
-- **Full pass**: with `n_dates: all` the recomputation is exact, and only floating-point error
-  remains: `statistics_rtol` x (|value| + stdev). On Varda-tiny this takes about 40 s and turns a
-  0.1 % change of the T_2M mean into an ERROR.
+- **Full pass**: with `n_dates: all` and `n_points: all` the recomputation is exact, and only
+  floating-point error remains: `statistics_rtol` x (|value| + stdev). That is affordable for small
+  datasets like Varda-tiny (about 1 min), not for multi-year ones.
 
 The INFO finding of the check lists the smallest detectable difference of each mean, both as an
 ERROR and as a WARNING. That shows when a fault is below what the sample can resolve. In that
 case a reference stats file still catches it, because that comparison is exact.
+
+### Calibrated tolerances
+
+Instead of the distribution-free bound, the tolerance can be measured:
+
+```bash
+uv run stats-bee calibrate data.zarr --spec checks/<dataset>.yaml --n-calib 300 \
+    -o checks/<dataset>.tolerances.yaml
+# then, in the spec:  calibrated_tolerances: <dataset>.tolerances.yaml
+```
+
+1. Read `--n-calib` stratified dates inside the statistics window. For each, keep the mean and
+   stdev of every variable over the spec's point subset and over the full domain (in memory).
+2. **Temporal error**: simulate `--n-sim` (2000) stratified samples of the size the check uses, and
+   take the largest deviation of their mean and stdev from those of all calibration dates.
+3. **Point bias**: the subset estimate minus the full-domain estimate, measured directly for the
+   spec's seed.
+
+The tolerance is |point bias| + `--margin` (2) x temporal error, per variable, for mean and stdev.
+The check then reports an ERROR beyond it and has no WARNING tier. Skewed variables like
+insolation get the tolerance they need, because the calibration samples their real distribution.
+The stored statistics are not used, so the dataset can calibrate itself, or the previous version
+of a dataset calibrates its rebuilds. The tolerance file has a fixed size. It is valid for one
+sampling only: if `seed`, `n_dates`, `n_points`, the grid or the number of estimation dates
+change, the check reports an ERROR asking to recalibrate, and falls back to the default
+tolerances. Calibration reads `--n-calib` dates over the full domain: about 5 min for 300 dates of
+ICH1 1 km.
 
 ## Limits
 
 - **Single-step faults** are only seen on sampled dates: a random sample hits one given step out
   of N with probability n/N. Put the dates you care about in `include_dates`, or use
   `n_dates: all` when a full pass is affordable.
-- **A field shifted or rolled in space** keeps its mean/stdev/min/max: that is spot-bee territory.
+- **Localized faults** (a single NaN point, a spike on a few points) are only seen on sampled
+  points: with k of G points, one bad point is found with probability k/G per sampled date. Use
+  `n_points: all` for full coverage; it costs CPU, not I/O.
+- **A field shifted or rolled in space** keeps its mean/stdev/min/max over the full domain. With a
+  point subset it changes the values on the sampled points, so the reference comparison finds it
+  (Varda-tiny `d-step-shift`), but not with `n_points: all`. Comparing with the source remains
+  spot-bee's job.
 
 ## Testing on Varda-tiny
 

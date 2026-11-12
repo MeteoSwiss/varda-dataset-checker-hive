@@ -50,7 +50,9 @@ def sample_time_indices(n_times: int, sampling: Sampling, exclude: Collection[in
     return sorted(picked)
 
 
-def sample_points(n_points: int, sampling: Sampling, salt: int = 0) -> np.ndarray:
+def sample_points(n_grid: int, sampling: Sampling, salt: int = 0) -> np.ndarray:
+    """Sorted seeded grid point indices, the same for every date; all points for `n_points: all`."""
+    if sampling.n_points == "all" or sampling.n_points >= n_grid:
+        return np.arange(n_grid)
     rng = np.random.default_rng([sampling.seed, 1, salt])
-    n = min(sampling.n_points, n_points)
-    return np.sort(rng.choice(n_points, size=n, replace=False))
+    return np.sort(rng.choice(n_grid, size=sampling.n_points, replace=False))

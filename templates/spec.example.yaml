@@ -19,12 +19,15 @@ ranges_file: physical_ranges.yaml
 # stats-bee: stats file of the accepted version to compare against. Uncomment once written with
 # `stats-bee dump data.zarr --spec <this file> -o <dataset>.stats.yaml`, committed next to this spec.
 # reference_stats: <dataset>.stats.yaml
+# stats-bee: calibrated tolerances for statistics_consistent. Uncomment once written with
+# `stats-bee calibrate data.zarr --spec <this file> -o <dataset>.tolerances.yaml`; recalibrate when `sampling` changes.
+# calibrated_tolerances: <dataset>.tolerances.yaml
 
 # Seeded sampling used by stats-bee and spot-bee
 sampling:
   seed: 0
-  n_dates: 20           # random time indices, or "all" for a full pass (exact statistics)
-  n_points: 1000        # grid points per field (spot-bee)
+  n_dates: 20           # random dates over the whole time range, or "all"
+  n_points: 10000       # grid points per date (the same on every date), or "all" for the full domain
   include_dates: []     # time indices always checked in addition
 
 tolerances:

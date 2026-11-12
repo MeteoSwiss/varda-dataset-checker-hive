@@ -28,7 +28,9 @@ class Sampling(_Strict):
     seed: int = 0
     # Random time indices, or "all" for a full pass (exact statistics, but reads every step).
     n_dates: int | Literal["all"] = 5
-    n_points: int = 1000
+    # Grid points per date, the same points on every date, or "all" for the full domain. stats-bee
+    # summarises them per date; spot-bee compares them with the source.
+    n_points: int | Literal["all"] = 1000
     # Time indices always included in the sample, in addition to the random ones.
     include_dates: list[int] = Field(default_factory=list)
 
@@ -77,6 +79,8 @@ class Spec(_Strict):
     ranges_file: Path | None = None
     # Stats file (written by `stats-bee dump`) to compare against, e.g. committed in the dataset repo.
     reference_stats: Path | None = None
+    # Tolerance file (written by `stats-bee calibrate`) for statistics_consistent.
+    calibrated_tolerances: Path | None = None
     sampling: Sampling = Field(default_factory=Sampling)
     tolerances: Tolerances = Field(default_factory=Tolerances)
     source: SourceSpec | None = None
@@ -95,7 +99,7 @@ def load_spec(path: str | Path | None) -> Spec:
     path = Path(path)
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     spec = Spec(**raw, base_dir=path.resolve().parent)
-    for key in ("ranges_file", "reference_stats"):
+    for key in ("ranges_file", "reference_stats", "calibrated_tolerances"):
         value = getattr(spec, key)
         if value is None:
             continue

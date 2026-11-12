@@ -44,6 +44,9 @@ EXPECTED = {
     "d-step-subtle": {"matches_reference_stats"},
     "d-step-constant": {"constant_fields", "matches_reference_stats"},
     "m-stats-dates": {"statistics_window_valid"},
+    # Rolled in space: same statistics over the full domain, but other values on the sampled points.
+    # Only found with a point subset (the default n_points), not with `n_points: all`.
+    "d-step-shift": {"matches_reference_stats"},
 }
 
 pytestmark = [
@@ -78,8 +81,3 @@ def test_clean_has_no_errors(spec):
 @pytest.mark.parametrize("scenario", sorted(EXPECTED))
 def test_fault_detected(scenario, spec):
     assert EXPECTED[scenario] <= _error_checks(_path(scenario), spec)
-
-
-@pytest.mark.xfail(reason="rolled field keeps mean/stdev/min/max: needs spot-bee", strict=True)
-def test_rolled_field_detected(spec):
-    assert _error_checks(_path("d-step-shift"), spec)

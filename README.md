@@ -31,6 +31,7 @@ uv run meta-bee check <dataset.zarr> --spec <spec.yaml>   # one bee
 uv run hive --list                                     # available checks
 uv run stats-bee dump <dataset.zarr> --spec <spec.yaml> -o stats.yaml   # stats file
 uv run stats-bee compare stats.yaml reference.yaml     # what is identical, what differs
+uv run stats-bee calibrate <dataset.zarr> --spec <spec.yaml> -o tolerances.yaml   # calibrated tolerances
 uv run hive <dataset.zarr> --spec <spec.yaml> --format json --fail-on warning
 ```
 
@@ -104,9 +105,12 @@ reference stats file is generated.
 3. **Write the ranges file.** Keep the bounds loose: they should catch unit errors and garbage,
    not unusual weather. Variables without a range are listed as INFO.
 
-4. **Choose the sampling.** `n_dates` random dates (`all` for an exact full pass), plus
-   `include_dates` for time indices you always want checked. Leave the `tolerances` at their
-   defaults unless a check tells you otherwise.
+4. **Choose the sampling.** `n_dates` random dates over the whole time range, `n_points` grid
+   points on each of them (10k–100k, or `all` for the full domain), plus `include_dates` for time
+   indices you always want checked. `all` for both gives an exact full pass, affordable only for
+   small datasets. Leave the `tolerances` at their defaults unless a check tells you otherwise.
+   Optionally calibrate them for this sampling with `stats-bee calibrate`, see
+   [docs/stats-bee.md](docs/stats-bee.md#calibrated-tolerances).
 
 5. **Check the dataset** and review every finding:
 
@@ -145,7 +149,8 @@ paths resolve against the spec file's directory.
 | `constant_fields` | stats-bee | fields that must not change in time (used when the dataset lists none) |
 | `ranges_file` | stats-bee | YAML of `{variable: {min, max, units}}`, see `templates/physical_ranges.example.yaml` |
 | `reference_stats` | stats-bee | stats file of the accepted version, written by `stats-bee dump` |
-| `sampling` | stats-bee, spot-bee | `seed`, `n_dates` (int or `all`), `n_points` (spot-bee), `include_dates` |
+| `calibrated_tolerances` | stats-bee | tolerance file for `statistics_consistent`, written by `stats-bee calibrate` |
+| `sampling` | stats-bee, spot-bee | `seed`, `n_dates` and `n_points` (int or `all`), `include_dates`; the same dates x points for both bees |
 | `tolerances` | stats-bee, spot-bee | `statistics_rtol`, `z_threshold`, `compare_atol_stdev` (stats-bee); `source_rtol`, `source_atol` (spot-bee) |
 | `source` | spot-bee | source plug-in, see above |
 | `ignore_warnings` | all bees | `{check: [variables]}` (or `"*"` for all variables): warnings demoted to INFO |

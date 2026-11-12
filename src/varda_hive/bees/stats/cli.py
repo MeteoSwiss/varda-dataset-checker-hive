@@ -3,18 +3,20 @@
 # Distributed under the terms of the BSD 3-Clause License.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-"""stats-bee's extra subcommands: `stats-bee dump` writes a stats file and `stats-bee compare`
-compares two of them. `stats-bee check` is the generic one, see varda_hive/cli.py."""
+"""stats-bee's extra subcommands: `stats-bee dump` writes a stats file, `stats-bee compare`
+compares two of them and `stats-bee calibrate` writes calibrated tolerances. `stats-bee check` is
+the generic one, see varda_hive/cli.py."""
 from argparse import ArgumentParser, Namespace
 
 from ...honeycomb import Dataset, Report, Severity, load_spec
 from ...honeycomb.report import to_json, to_text
+from .calibrate import calibrate
 from .statsfile import CLOSE, DIFFERS, IDENTICAL, compare_stats, compute_stats, load_stats, save_stats
 
 
 def _add_dump_args(p: ArgumentParser) -> None:
-    p.description = ("Write the stats file of an anemoi dataset: stored statistics, per-date summaries "
-                     "and recomputed statistics on the sampled dates.")
+    p.description = ("Write the stats file of an anemoi dataset: its stored statistics, and the statistics of "
+                     "the sample of dates x points. The file size depends only on the number of variables.")
     p.epilog = """examples:
   stats-bee dump data.zarr --spec spec.yaml -o checks/data.stats.yaml        # reference, commit it
   stats-bee dump new.zarr --spec spec.yaml --dates-from checks/data.stats.yaml -o new.stats.yaml
@@ -22,7 +24,9 @@ def _add_dump_args(p: ArgumentParser) -> None:
 See docs/stats-bee.md for the file layout and how the tolerances work."""
     p.add_argument("dataset", help="path to the anemoi zarr dataset")
     p.add_argument("--spec", help="dataset spec YAML (sampling settings)")
-    p.add_argument("--dates-from", metavar="STATS", help="use the dates of this stats file (e.g. the reference)")
+    p.add_argument("--dates-from",
+                   metavar="STATS",
+                   help="sample the dates of this stats file (e.g. the reference), so the two compare")
     p.add_argument("-o",
                    "--output",
                    default="-",
@@ -73,8 +77,35 @@ def _compare(args: Namespace) -> int:
     return report.exit_code(Severity[args.fail_on.upper()])
 
 
+def _add_calibrate_args(p: ArgumentParser) -> None:
+    p.description = ("Calibrate the tolerances of statistics_consistent for the spec's sampling: read a large "
+                     "calibration sample of dates, simulate the check's sample on it, and write the largest "
+                     "sampling error per variable (times a margin), plus the bias of the point subset.")
+    p.epilog = """examples:
+  stats-bee calibrate data.zarr --spec checks/data.yaml --n-calib 300 -o checks/data.tolerances.yaml
+
+Then set `calibrated_tolerances: data.tolerances.yaml` in the spec. Recalibrate whenever the
+sampling (seed, n_dates, n_points) changes. See docs/stats-bee.md."""
+    p.add_argument("dataset", help="path to the anemoi zarr dataset")
+    p.add_argument("--spec", help="dataset spec YAML (sampling settings)")
+    p.add_argument("--n-calib", type=int, default=300, help="dates to read for calibration (default: 300)")
+    p.add_argument("--n-sim", type=int, default=2000, help="simulated samples (default: 2000)")
+    p.add_argument("--margin", type=float, default=2.0, help="factor on the largest simulated error (default: 2)")
+    p.add_argument("-o",
+                   "--output",
+                   default="-",
+                   help="output file, YAML for .yaml/.yml, otherwise JSON (default: JSON to stdout)")
+
+
+def _calibrate(args: Namespace) -> int:
+    tolerances = calibrate(Dataset(args.dataset), load_spec(args.spec), args.n_calib, args.n_sim, args.margin)
+    save_stats(tolerances, args.output)
+    return 0
+
+
 # (name, help, add_args, handler), see `Subcommand` in varda_hive/cli.py.
 SUBCOMMANDS = [
     ("dump", "write the stats file of a dataset", _add_dump_args, _dump),
     ("compare", "compare a stats file with a reference stats file", _add_compare_args, _compare),
+    ("calibrate", "write calibrated tolerances for statistics_consistent", _add_calibrate_args, _calibrate),
 ]
