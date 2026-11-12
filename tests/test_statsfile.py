@@ -3,7 +3,6 @@
 # Distributed under the terms of the BSD 3-Clause License.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
 """Stats files: generation, round-trip and comparison, and `stats-bee dump` / `stats-bee compare`."""
 import json
 
@@ -80,8 +79,7 @@ def test_compare_aligns_dates_not_positions(dataset_path, tmp_path):
     longer = build_dataset(tmp_path / "longer.zarr", nt=NT + 5)
     stats = compute_stats(Dataset(longer), Spec(), dates_from=reference)
     assert stats["dates"] == reference["dates"]
-    assert not any("dates" in f.message for f in compare_stats(stats, reference).findings
-                   if f.severity > Severity.INFO)
+    assert not any("dates" in f.message for f in compare_stats(stats, reference).findings if f.severity > Severity.INFO)
 
 
 def test_compare_reports_missing_dates_and_variables(dataset_path, tmp_path):
@@ -107,8 +105,12 @@ def test_sampled_test_has_no_false_errors(tmp_path):
     root["mean"][:], root["stdev"][:] = v.mean(axis=(0, 2, 3)), v.std(axis=(0, 2, 3))
     root["minimum"][:], root["maximum"][:] = v.min(axis=(0, 2, 3)), v.max(axis=(0, 2, 3))
     for seed in range(20):
-        report = run(CheckContext(Dataset(path), Spec(sampling={"seed": seed, "n_dates": 8})),
-                     bees=["stats"], select=["statistics_consistent"])
+        report = run(CheckContext(Dataset(path), Spec(sampling={
+            "seed": seed,
+            "n_dates": 8
+        })),
+                     bees=["stats"],
+                     select=["statistics_consistent"])
         assert report.count(Severity.ERROR) == 0, (seed, report.findings)
 
 

@@ -13,7 +13,8 @@ comparing grid-point values with the source is spot-bee's job.
 |---|---|---|
 | `statistics_consistent` | stored mean/stdev/min/max are self-consistent (no NaN, min <= mean <= max, stdev 0 exactly when min == max) and match the ones recomputed from the sampled dates | ERROR / WARNING, see [tolerances](#how-the-tolerances-work) |
 | `physical_ranges` | per-date and stored min/max inside the ranges of the spec's `ranges_file` | ERROR |
-| `no_nans` | no NaNs on the sampled dates, unless the dataset sets `allow_nans` | ERROR |
+| `finite_values` | no inf on the sampled dates, and no NaN unless the dataset sets `allow_nans` | ERROR |
+| `statistics_window_valid` | `statistics_start_date` <= `statistics_end_date`, both within the dataset's dates | ERROR / WARNING if missing |
 | `constant_fields` | fields in `constant_fields` don't change between dates (ERROR); other fields aren't identical on all dates, or uniform in space on one date (WARNING, computed forcings exempt) | ERROR / WARNING |
 | `matches_reference_stats` | stored statistics and per-date values match the spec's `reference_stats`, on the reference's dates, see [stats files](#stats-files) | ERROR / WARNING |
 
@@ -32,6 +33,7 @@ what is on disk. It reads the `.zattrs` keys that anemoi writes:
 - `variables`
 - `statistics_start_date` / `statistics_end_date`: the window the stored statistics cover
 - `allow_nans`
+- `missing_dates`: never sampled, and left out of the population the statistics are estimated for
 - `constant_fields`
 - `variables_metadata[...].computed_forcing`
 
@@ -50,10 +52,11 @@ spec), anything else gives JSON.
 | `sampling` | seed, `n_dates`, `include_dates`, statistics window, dates of `--dates-from` missing in the dataset |
 | `dates`, `time_index`, `random` | the sampled dates; `random` marks the ones used to estimate the statistics |
 | `stored` | the dataset's stored mean/stdev/minimum/maximum per variable |
-| `per_date` | mean/stdev/minimum/maximum/n_nan per variable, one list entry per date |
+| `per_date` | mean/stdev/minimum/maximum of the finite values, and n_nan/n_inf, per variable, one list entry per date |
 | `recomputed` | statistics estimated from the random dates, with their standard errors `se_mean`/`se_stdev` |
 
-Floats are written with `repr`, which round-trips exactly, and NaN is written as `null`.
+Floats are written with `repr`, which round-trips exactly, and NaN and inf are written as `null`.
+The current format is `varda-hive-stats/2`, which added `n_inf`. Format 1 files still load and compare.
 
 ### Reference workflow in a dataset repo
 
@@ -126,7 +129,6 @@ case a reference stats file still catches it, because that comparison is exact.
   of N with probability n/N. Put the dates you care about in `include_dates`, or use
   `n_dates: all` when a full pass is affordable.
 - **A field shifted or rolled in space** keeps its mean/stdev/min/max: that is spot-bee territory.
-- Dates listed in the dataset's `missing_dates` are not excluded from the sample yet.
 
 ## Testing on Varda-tiny
 

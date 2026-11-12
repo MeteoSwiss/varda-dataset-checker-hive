@@ -3,14 +3,15 @@
 # Distributed under the terms of the BSD 3-Clause License.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
 """The stats-bee on Varda-tiny and its faulty variants (MRB-1032).
 
-Opt-in: `uv run pytest -m faulty`. Skipped when the datasets are not on this machine.
+Opt-in: `uv run pytest -m faulty`. Skipped when the datasets are not on this machine. Set
+HIVE_FAULTY_DIR (the directory with manifest.json) and HIVE_CLEAN_DS to use other copies.
 The faults are at time index 100, so the spec always samples it (and 99, for stale steps);
 a random sample alone would hit it with probability n_dates / 720.
 """
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -18,9 +19,11 @@ import pytest
 from varda_hive.honeycomb import CheckContext, Dataset, Severity, load_spec, run
 from varda_hive.bees.stats.statsfile import compute_stats, save_stats
 
-FAULTY = Path("/scratch/mch/huppd/ich1-analysis-tiny-dataset/faulty")
-CLEAN = Path("/scratch/mch/huppd/varda/ich1-analysis-anemoi-dataset/ml_test/datasets/"
-             "varda-kenda-ch1-2km-2020-2020-1h-v1.0-pl13-test.zarr")
+FAULTY = Path(os.environ.get("HIVE_FAULTY_DIR", "/scratch/mch/huppd/ich1-analysis-tiny-dataset/faulty"))
+CLEAN = Path(
+    os.environ.get(
+        "HIVE_CLEAN_DS", "/scratch/mch/huppd/varda/ich1-analysis-anemoi-dataset/ml_test/datasets/"
+        "varda-kenda-ch1-2km-2020-2020-1h-v1.0-pl13-test.zarr"))
 RANGES = Path(__file__).resolve().parents[1] / "templates" / "physical_ranges.example.yaml"
 
 # scenario -> checks expected to report an ERROR
@@ -31,8 +34,8 @@ EXPECTED = {
     "d-stats-subtle": {"matches_reference_stats"},  # below the sampling error; caught exactly with n_dates: all
     "d-shift-consistent": {"matches_reference_stats"},  # self-consistent
     "d-step-spike-stats-updated": {"physical_ranges", "matches_reference_stats"},
-    "d-step-nan": {"no_nans", "matches_reference_stats"},
-    "d-step-allvars-nan": {"no_nans", "matches_reference_stats"},
+    "d-step-nan": {"finite_values", "matches_reference_stats"},
+    "d-step-allvars-nan": {"finite_values", "matches_reference_stats"},
     "d-step-zero": {"physical_ranges", "matches_reference_stats"},
     "d-step-spike": {"physical_ranges", "matches_reference_stats"},
     "d-step-unit": {"physical_ranges", "matches_reference_stats"},
@@ -40,6 +43,7 @@ EXPECTED = {
     "d-step-stale": {"matches_reference_stats"},
     "d-step-subtle": {"matches_reference_stats"},
     "d-step-constant": {"constant_fields", "matches_reference_stats"},
+    "m-stats-dates": {"statistics_window_valid"},
 }
 
 pytestmark = [

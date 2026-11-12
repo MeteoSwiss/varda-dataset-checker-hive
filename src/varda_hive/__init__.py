@@ -3,7 +3,6 @@
 # Distributed under the terms of the BSD 3-Clause License.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
 """varda-dataset-checker-hive: slim bees checking anemoi datasets.
 
 - meta-bee:  metadata and structure
@@ -11,4 +10,9 @@
 - spot-bee:  sampled values vs the original source
 - hive:      runs all bees and merges their findings
 """
-__version__ = "0.1.0"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("varda-dataset-checker-hive")
+except PackageNotFoundError:  # running from a source tree that is not installed
+    __version__ = "unknown"

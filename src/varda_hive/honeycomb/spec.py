@@ -3,7 +3,6 @@
 # Distributed under the terms of the BSD 3-Clause License.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
 """The per-dataset spec: what a dataset is expected to look like and where
 its source data lives. Specs live in the dataset's own repo; see
 templates/spec.example.yaml.
@@ -12,6 +11,7 @@ Every field is optional, so a spec can start small. Checks that need an
 unset field skip themselves with an INFO finding.
 """
 from datetime import datetime
+import math
 from pathlib import Path
 from typing import Any, Literal
 
@@ -51,6 +51,21 @@ class SourceSpec(_Strict):
     args: dict[str, Any] = Field(default_factory=dict)
 
 
+class PhysicalRange(_Strict):
+    """One entry of a `ranges_file`."""
+    min: float = -math.inf
+    max: float = math.inf
+    units: str = ""
+
+
+def load_ranges(path: Path) -> dict[str, PhysicalRange]:
+    """Read and validate a `ranges_file`: {variable: {min, max, units}}, unknown keys rejected."""
+    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path}: expected a mapping of variable -> {{min, max, units}}")
+    return {str(name): PhysicalRange(**(bounds or {})) for name, bounds in raw.items()}
+
+
 class Spec(_Strict):
     name: str | None = None
     variables: list[str] | None = None
@@ -65,11 +80,16 @@ class Spec(_Strict):
     sampling: Sampling = Field(default_factory=Sampling)
     tolerances: Tolerances = Field(default_factory=Tolerances)
     source: SourceSpec | None = None
+    # Known, accepted warnings, demoted to INFO: {check name: [variables]}, "*" for all variables.
+    # E.g. {statistics_consistent: [insolation]} for a diurnal field the sample cannot resolve.
+    ignore_warnings: dict[str, list[str]] = Field(default_factory=dict)
     # Directory of the spec file; relative paths in the spec resolve against it.
     base_dir: Path = Field(default_factory=Path.cwd, exclude=True)
 
 
 def load_spec(path: str | Path | None) -> Spec:
+    """Load and validate a spec. Files it names must exist, and the ranges file must be valid, so a
+    misconfigured spec fails here (CLI exit code 2) instead of in every check."""
     if path is None:
         return Spec()
     path = Path(path)
@@ -77,6 +97,13 @@ def load_spec(path: str | Path | None) -> Spec:
     spec = Spec(**raw, base_dir=path.resolve().parent)
     for key in ("ranges_file", "reference_stats"):
         value = getattr(spec, key)
-        if value is not None and not value.is_absolute():
-            setattr(spec, key, spec.base_dir / value)
+        if value is None:
+            continue
+        if not value.is_absolute():
+            value = spec.base_dir / value
+            setattr(spec, key, value)
+        if not value.is_file():
+            raise FileNotFoundError(f"{path}: {key} not found: {value}")
+    if spec.ranges_file is not None:
+        load_ranges(spec.ranges_file)
     return spec

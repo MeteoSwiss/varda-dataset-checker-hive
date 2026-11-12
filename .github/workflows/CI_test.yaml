@@ -42,18 +42,7 @@ jobs:
       run: uv run pylint -rn --output-format=parseable src/varda_hive
 
     - name: Run static checker
-      run: |
-        OUTPUT=$(uv run mypy src/varda_hive 2>&1 || true)
-        echo "$OUTPUT"
+      run: uv run mypy src/varda_hive
 
-        # Extract the error count from lines
-        COUNT=$(echo "$OUTPUT" | grep -Po 'Found \K[0-9]+(?= errors?)' || echo 0)
-        echo "Found $COUNT mypy errors"
-
-        MAX_ERRORS=5
-        if [ "$COUNT" -gt "$MAX_ERRORS" ]; then
-          echo "$COUNT/$MAX_ERRORS mypy errors found."
-          exit 1
-        else
-          exit 0
-        fi
+    - name: Check formatting
+      run: uv run yapf --diff --recursive src tests

@@ -3,7 +3,6 @@
 # Distributed under the terms of the BSD 3-Clause License.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
 """meta-bee: metadata and structure checks. Cheap - never reads `data`.
 
 Planned: anemoi-datasets validate, structure diff vs a reference dataset,
@@ -11,7 +10,7 @@ date/frequency/missing_dates consistency, grid and resolution vs spec.
 """
 from typing import Iterator
 
-from ...honeycomb import CheckContext, Finding, check, error, info
+from ...honeycomb import CheckContext, Finding, check, error, skipped
 
 
 @check("meta")
@@ -19,7 +18,7 @@ def variables_match_spec(ctx: CheckContext) -> Iterator[Finding]:
     """The dataset has exactly the variables listed in the spec."""
     expected = ctx.spec.variables
     if expected is None:
-        yield info("skipped: no `variables` in spec")
+        yield skipped("no `variables` in spec")
         return
     actual = ctx.dataset.variables
     for name in sorted(set(expected) - set(actual)):

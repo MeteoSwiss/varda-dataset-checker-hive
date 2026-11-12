@@ -56,8 +56,10 @@ def dataset_path(tmp_path):
 
 @pytest.fixture
 def write_spec(tmp_path):
+
     def write(text: str, name: str = "spec.yaml") -> Path:
         path = tmp_path / name
         path.write_text(text)
         return path
+
     return write

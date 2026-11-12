@@ -3,7 +3,6 @@
 # Distributed under the terms of the BSD 3-Clause License.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
 """Check registration and the runner shared by all bees.
 
 A check is a function `fn(ctx: CheckContext) -> Iterable[Finding]`,
@@ -11,13 +10,13 @@ registered with `@check("meta")`. The runner fills in bee/check names on the
 findings and turns a crashing check into an ERROR finding, so one broken
 check never hides the results of the others.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import importlib
 import traceback
 from typing import Callable, Iterable
 
 from .dataset import Dataset
-from .findings import Finding, Report, error
+from .findings import Finding, Report, Severity, error
 from .spec import Spec
 
 BEES = ("meta", "stats", "spot")
@@ -64,21 +63,53 @@ def checks_for(bee: str) -> list[CheckInfo]:
 
 
 def run(ctx: CheckContext, bees: Iterable[str] = BEES, select: Iterable[str] | None = None) -> Report:
-    """Run all checks of `bees` (optionally only the check names in `select`)."""
-    selected = set(select) if select else None
+    """Run all checks of `bees`, or only those in `select` ("check" or "bee.check").
+
+    Raises ValueError for a name in `select` that matches no check of `bees`: a typo must not turn
+    into a run of zero checks that passes.
+    """
+    bees = list(bees)
+    selected = _resolve_select(bees, select)
     report = Report(dataset=str(ctx.dataset.path))
     for bee in bees:
         for info in checks_for(bee):
-            if selected is not None and info.name not in selected:
+            if selected is not None and (bee, info.name) not in selected:
                 continue
             try:
-                findings = list(info.fn(ctx))
+                findings = [_apply_ignore(f, ctx.spec.ignore_warnings.get(info.name)) for f in info.fn(ctx)]
             # Reported, not swallowed.
             except Exception as e:  # noqa: BLE001  # pylint: disable=broad-exception-caught
-                findings = [error(f"check crashed: {type(e).__name__}: {e}",
-                                  details={"traceback": traceback.format_exc()})]
+                findings = [
+                    error(f"check crashed: {type(e).__name__}: {e}", details={"traceback": traceback.format_exc()})
+                ]
             report.add(bee, info.name, findings)
     return report
+
+
+def _resolve_select(bees: list[str], select: Iterable[str] | None) -> set[tuple[str, str]] | None:
+    if not select:
+        return None
+    available = {(bee, c.name) for bee in bees for c in checks_for(bee)}
+    selected, unknown = set(), []
+    for name in select:
+        bee, _, check_name = name.rpartition(".")
+        matches = {(b, c) for b, c in available if c == check_name and bee in ("", b)}
+        if not matches:
+            unknown.append(name)
+        selected |= matches
+    if unknown:
+        valid = ", ".join(sorted(f"{b}.{c}" for b, c in available))
+        raise ValueError(f"unknown check(s) {', '.join(unknown)}; available: {valid}")
+    return selected
+
+
+def _apply_ignore(finding: Finding, variables: list[str] | None) -> Finding:
+    """Demote a WARNING the spec lists in `ignore_warnings` to INFO."""
+    if finding.severity != Severity.WARNING or not variables:
+        return finding
+    if "*" in variables or finding.variable in variables:
+        return replace(finding, severity=Severity.INFO, message=f"{finding.message} (ignored by spec)")
+    return finding
 
 
 def _load_bees() -> None:

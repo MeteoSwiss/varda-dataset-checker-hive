@@ -3,7 +3,6 @@
 # Distributed under the terms of the BSD 3-Clause License.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
 """Read-only access to an anemoi dataset (zarr v2) without going through
 anemoi-datasets, so checks see exactly what is stored on disk."""
 from functools import cached_property
@@ -18,6 +17,7 @@ STATISTICS = ("mean", "stdev", "minimum", "maximum")
 
 
 class Dataset:
+
     def __init__(self, path: str | Path):
         self.path = Path(path)
         if not (self.path / ".zattrs").exists():
@@ -42,6 +42,13 @@ class Dataset:
     @cached_property
     def dates(self) -> np.ndarray:
         return self.root["dates"][:].astype("datetime64[s]")
+
+    @cached_property
+    def missing_indices(self) -> frozenset[int]:
+        """Time indices listed in the `missing_dates` attribute: anemoi leaves their data unset and
+        excludes them from the statistics, so checks must not sample them."""
+        missing = np.array(self.attrs.get("missing_dates") or [], dtype="datetime64[s]")
+        return frozenset(np.flatnonzero(np.isin(self.dates, missing)).tolist())
 
     def date_str(self, t: int) -> str:
         return str(self.dates[t])

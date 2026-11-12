@@ -3,14 +3,13 @@
 # Distributed under the terms of the BSD 3-Clause License.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
 """spot-bee: compare a seeded sample of (time, variable, grid points)
 against the original source, provided by the dataset's source plug-in."""
 from typing import Iterator
 
 import numpy as np
 
-from ...honeycomb import CheckContext, Finding, check, error, info, load_source, warning
+from ...honeycomb import CheckContext, Finding, check, error, load_source, skipped, warning
 from ...honeycomb.sampling import sample_points, sample_time_indices
 
 
@@ -21,11 +20,11 @@ def matches_source(ctx: CheckContext) -> Iterator[Finding]:
         ctx.cache["source"] = load_source(ctx.spec)
     source = ctx.cache["source"]
     if source is None:
-        yield info("skipped: no `source` in spec")
+        yield skipped("no `source` in spec")
         return
     ds, tol = ctx.dataset, ctx.spec.tolerances
     points = sample_points(ds.data.shape[-1], ctx.spec.sampling)
-    for t in sample_time_indices(len(ds.dates), ctx.spec.sampling):
+    for t in sample_time_indices(len(ds.dates), ctx.spec.sampling, exclude=ds.missing_indices):
         step = ds.step(t)
         for i, name in enumerate(ds.variables):
             expected = source.fetch(name, ds.dates[t])
@@ -39,7 +38,11 @@ def matches_source(ctx: CheckContext) -> Iterator[Finding]:
                 diff = np.abs(actual - expected)
                 finite = diff[np.isfinite(diff)]
                 yield error(f"{bad.sum()}/{len(points)} sampled points differ from source",
-                            variable=name, time=ds.date_str(t),
-                            details={"time_index": int(t), "n_nan_mismatch": int((~np.isfinite(diff)).sum()),
-                                     "max_abs_diff": float(finite.max()) if finite.size else None,
-                                     "first_points": points[bad][:10].tolist()})
+                            variable=name,
+                            time=ds.date_str(t),
+                            details={
+                                "time_index": int(t),
+                                "n_nan_mismatch": int((~np.isfinite(diff)).sum()),
+                                "max_abs_diff": float(finite.max()) if finite.size else None,
+                                "first_points": points[bad][:10].tolist()
+                            })

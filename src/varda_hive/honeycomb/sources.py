@@ -3,7 +3,6 @@
 # Distributed under the terms of the BSD 3-Clause License.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
 """Where spot-bee gets the "true" values from.
 
 A source is any object with `fetch(variable, date) -> np.ndarray | None`
@@ -24,7 +23,9 @@ from .spec import Spec
 
 @runtime_checkable
 class Source(Protocol):
-    def fetch(self, variable: str, date: np.datetime64) -> np.ndarray | None: ...
+
+    def fetch(self, variable: str, date: np.datetime64) -> np.ndarray | None:
+        ...
 
 
 def load_source(spec: Spec) -> Source | None:

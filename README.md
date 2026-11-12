@@ -34,7 +34,28 @@ uv run stats-bee compare stats.yaml reference.yaml     # what is identical, what
 uv run hive <dataset.zarr> --spec <spec.yaml> --format json --fail-on warning
 ```
 
-Exit code is 0 when no finding reaches `--fail-on` (default `error`), and 1 otherwise.
+Exit codes:
+
+| code | meaning |
+|---|---|
+| 0 | no finding reaches `--fail-on` (default `error`); with `--strict`, also no check was skipped |
+| 1 | the dataset failed the checks (a crash inside one check counts here, as an ERROR finding) |
+| 2 | usage or configuration error: missing dataset, invalid spec or ranges file, unknown `--select` name |
+| 3 | internal error of the tool |
+
+## Release CI
+
+Gate a release on the dataset's spec and its committed reference stats file:
+
+```bash
+uv run hive $DATASET --spec checks/<dataset>.yaml --strict --report hive.json
+```
+
+- `--strict` fails when a check is skipped, e.g. because the spec has no `ranges_file`. Otherwise a
+  misconfigured job stays green.
+- `--report` writes the JSON report as a CI artifact, while the text goes to the log.
+- Known, accepted warnings can be demoted to INFO in the spec, so `--fail-on warning` stays usable:
+  `ignore_warnings: {statistics_consistent: [insolation]}`.
 
 ## Findings, not assertions
 

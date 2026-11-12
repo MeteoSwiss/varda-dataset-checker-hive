@@ -3,19 +3,22 @@
 # Distributed under the terms of the BSD 3-Clause License.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
 """Stats files: a small YAML or JSON fingerprint of a dataset's values (the format follows
 the file extension), written by `stats-bee dump` and compared by `stats-bee compare`.
 
 A stats file holds, for a seeded sample of dates:
 - `stored`: the statistics stored in the dataset (mean, stdev, minimum, maximum)
-- `per_date`: mean, stdev, minimum, maximum and NaN count of every variable at every sampled date
+- `per_date`: mean, stdev, minimum and maximum of the finite values, and the NaN and inf counts,
+  of every variable at every sampled date
 - `recomputed`: the statistics estimated from the random dates inside the statistics window,
   with their sampling errors (`se_*`, 0 when every date of the window was read)
 
 Two stats files built on the same dates (see `--dates-from`) compare cell by cell, without
 any statistics: a value is identical, close (within `compare_atol_stdev` * stdev) or differs.
-Both formats write floats with `repr`, which round-trips exactly, and NaN as null.
+Both formats write floats with `repr`, which round-trips exactly, and NaN/inf as null.
+
+Dates in the dataset's `missing_dates` are never sampled. Format 1 files (no `n_inf`) still load
+and compare.
 """
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -33,8 +36,10 @@ from ...honeycomb import Dataset, Finding, Spec, error, info, warning
 from ...honeycomb.dataset import STATISTICS
 from ...honeycomb.sampling import random_time_indices
 
-FORMAT = "varda-hive-stats/1"
-PER_DATE = ("mean", "stdev", "minimum", "maximum", "n_nan")
+FORMAT = "varda-hive-stats/2"
+READABLE_FORMATS = ("varda-hive-stats/1", FORMAT)
+PER_DATE = ("mean", "stdev", "minimum", "maximum", "n_nan", "n_inf")
+COUNTS = ("n_nan", "n_inf")
 N_BOOTSTRAP = 200
 
 
@@ -48,7 +53,8 @@ def statistics_window(ds: Dataset) -> tuple[int, int]:
     return lo, hi
 
 
-def compute_stats(ds: Dataset, spec: Spec, dates_from: dict | None = None) -> dict[str, Any]:
+def compute_stats(  # pylint: disable=too-many-locals
+        ds: Dataset, spec: Spec, dates_from: dict | None = None) -> dict[str, Any]:
     """Build the stats file content for `ds`.
 
     The dates are the spec's sample (stratified random dates in the statistics window plus
@@ -57,36 +63,57 @@ def compute_stats(ds: Dataset, spec: Spec, dates_from: dict | None = None) -> di
     """
     window = statistics_window(ds)
     date_strs = [str(d) for d in ds.dates]
+    excluded = ds.missing_indices
     if dates_from is not None:
-        position = {d: t for t, d in enumerate(date_strs)}
+        position = {d: t for t, d in enumerate(date_strs) if t not in excluded}
         wanted = list(zip(dates_from["dates"], dates_from["random"]))
         missing = [d for d, _ in wanted if d not in position]
         picked = {position[d]: r for d, r in wanted if d in position}
     else:
-        missing = []
-        picked = {t: False for t in spec.sampling.include_dates if 0 <= t < len(ds.dates)}
-        picked |= {t: True for t in random_time_indices(len(ds.dates), spec.sampling, window, stratified=True)}
+        missing = [date_strs[t] for t in spec.sampling.include_dates if t in excluded]
+        picked = {t: False for t in spec.sampling.include_dates if 0 <= t < len(ds.dates) and t not in excluded}
+        picked |= {
+            t: True
+            for t in random_time_indices(len(ds.dates), spec.sampling, window, stratified=True, exclude=excluded)
+        }
     indices = sorted(picked)
+    # The stored statistics skip the missing dates, so the population is the window without them.
+    n_window = sum(1 for t in range(*window) if t not in excluded)
 
     per_date = np.full((len(indices), len(ds.variables), len(PER_DATE)), np.nan)
     for k, t in enumerate(indices):
         per_date[k] = _summarise(ds.step(t))
 
     random = np.array([picked[t] and window[0] <= t < window[1] for t in indices], dtype=bool)
+    stored = {s: ds.statistic(s) for s in STATISTICS if s in ds.arrays}  # one read per array
     return {
         "format": FORMAT,
-        "dataset": {"name": ds.name, "path": str(ds.path.resolve()), "uuid": ds.attrs.get("uuid")},
+        "dataset": {
+            "name": ds.name,
+            "path": str(ds.path.resolve()),
+            "uuid": ds.attrs.get("uuid")
+        },
         "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "generator": f"varda-dataset-checker-hive {__version__}",
         "sampling": {
-            "seed": spec.sampling.seed,
-            "n_dates": spec.sampling.n_dates,
-            "include_dates": spec.sampling.include_dates,
-            "dates_from": dates_from["dataset"]["name"] if dates_from else None,
-            "statistics_window": [date_strs[window[0]] if window[0] < len(date_strs) else None,
-                                  date_strs[window[1] - 1] if window[1] > 0 else None],
-            "n_window": window[1] - window[0],
-            "missing_dates": missing,
+            "seed":
+            spec.sampling.seed,
+            "n_dates":
+            spec.sampling.n_dates,
+            "include_dates":
+            spec.sampling.include_dates,
+            "dates_from":
+            dates_from["dataset"]["name"] if dates_from else None,
+            "statistics_window": [
+                date_strs[window[0]] if window[0] < len(date_strs) else None,
+                date_strs[window[1] - 1] if window[1] > 0 else None
+            ],
+            "n_window":
+            n_window,
+            # Requested dates (`--dates-from` or `include_dates`) not sampled: absent from the
+            # dataset, or in its `missing_dates`.
+            "missing_dates":
+            missing,
         },
         "variables": list(ds.variables),
         "dates": [date_strs[t] for t in indices],
@@ -95,25 +122,37 @@ def compute_stats(ds: Dataset, spec: Spec, dates_from: dict | None = None) -> di
         # to estimate the statistics, the `include_dates` would bias the estimate.
         "random": random.tolist(),
         "stored": {
-            name: {s: _num(ds.statistic(s)[i]) for s in STATISTICS if s in ds.arrays}
+            name: {
+                s: _num(values[i])
+                for s, values in stored.items()
+            }
             for i, name in enumerate(ds.variables)
         },
         "per_date": {
-            name: {s: [_num(x, int if s == "n_nan" else float) for x in per_date[:, i, j]]
-                   for j, s in enumerate(PER_DATE)}
+            name: {
+                s: [_num(x, int if s in COUNTS else float) for x in per_date[:, i, j]]
+                for j, s in enumerate(PER_DATE)
+            }
             for i, name in enumerate(ds.variables)
         },
-        "recomputed": _recompute(per_date[random], window[1] - window[0], ds.variables, spec.sampling.seed),
+        "recomputed": _recompute(per_date[random], n_window, ds.variables, spec.sampling.seed),
     }
 
 
 def _summarise(step: np.ndarray) -> np.ndarray:
-    """(variable, ...) -> (variable, PER_DATE) in float64, ignoring NaNs."""
+    """(variable, ...) -> (variable, PER_DATE) in float64: summaries of the finite values, plus the
+    NaN and inf counts. An inf must not turn the summaries into inf/NaN and hide the variable."""
     x = step.reshape(step.shape[0], -1).astype("f8")
+    n_nan, n_inf = np.isnan(x).sum(axis=1), np.isinf(x).sum(axis=1)
+    x[~np.isfinite(x)] = np.nan
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN fields give NaN, which is what we want
-        return np.stack([np.nanmean(x, axis=1), np.nanstd(x, axis=1), np.nanmin(x, axis=1),
-                         np.nanmax(x, axis=1), np.isnan(x).sum(axis=1)], axis=1)
+        return np.stack(
+            [np.nanmean(x, axis=1),
+             np.nanstd(x, axis=1),
+             np.nanmin(x, axis=1),
+             np.nanmax(x, axis=1), n_nan, n_inf],
+            axis=1)
 
 
 def _recompute(  # pylint: disable=too-many-locals
@@ -141,19 +180,26 @@ def _recompute(  # pylint: disable=too-many-locals
         se_mean = m.std(axis=0, ddof=1) / math.sqrt(n) * fpc if n > 1 else np.full(len(variables), np.nan)
         if n > 1 and fpc > 0:
             idx = np.random.default_rng([seed, 2]).integers(0, n, size=(N_BOOTSTRAP, n))
-            boot = np.sqrt((s[idx] ** 2).mean(axis=1) + m[idx].var(axis=1))
+            boot = np.sqrt((s[idx]**2).mean(axis=1) + m[idx].var(axis=1))
             se_stdev = boot.std(axis=0, ddof=1) * fpc
         else:
             se_stdev = np.zeros(len(variables)) if fpc == 0 else np.full(len(variables), np.nan)
     for i, name in enumerate(variables):
-        out[name] |= {"mean": _num(mean[i]), "stdev": _num(stdev[i]), "minimum": _num(lo[:, i].min()),
-                      "maximum": _num(hi[:, i].max()), "se_mean": _num(se_mean[i]), "se_stdev": _num(se_stdev[i])}
+        out[name] |= {
+            "mean": _num(mean[i]),
+            "stdev": _num(stdev[i]),
+            "minimum": _num(lo[:, i].min()),
+            "maximum": _num(hi[:, i].max()),
+            "se_mean": _num(se_mean[i]),
+            "se_stdev": _num(se_stdev[i])
+        }
     return out
 
 
 def _num(x: Any, kind: Callable[[float], float] = float) -> float | None:
+    """A JSON/YAML-safe number: NaN and inf become None."""
     x = float(x)
-    return None if math.isnan(x) else kind(x)
+    return kind(x) if math.isfinite(x) else None
 
 
 YAML_SUFFIXES = (".yaml", ".yml")
@@ -169,7 +215,7 @@ def save_stats(stats: dict, path: str | Path | None) -> None:
     if path not in (None, "-") and Path(path).suffix in YAML_SUFFIXES:
         text = yaml.dump(stats, Dumper=_Dumper, sort_keys=False, default_flow_style=None, width=120)
     else:
-        text = json.dumps(stats, indent=1) + "\n"
+        text = json.dumps(stats, indent=1, allow_nan=False) + "\n"
     if path in (None, "-"):
         print(text, end="")
     else:
@@ -179,8 +225,8 @@ def save_stats(stats: dict, path: str | Path | None) -> None:
 def load_stats(path: str | Path) -> dict:
     text = Path(path).read_text(encoding="utf-8")
     stats = yaml.load(text, Loader=_Loader) if Path(path).suffix in YAML_SUFFIXES else json.loads(text)
-    if stats.get("format") != FORMAT:
-        raise ValueError(f"{path}: not a stats file of format {FORMAT!r}")
+    if not isinstance(stats, dict) or stats.get("format") not in READABLE_FORMATS:
+        raise ValueError(f"{path}: not a stats file of format {' or '.join(map(repr, READABLE_FORMATS))}")
     return stats
 
 
@@ -212,11 +258,11 @@ def compare_stats(  # pylint: disable=too-many-locals
     only_ref = [d for d in reference["dates"] if d not in position]
     only_new = sorted(set(stats["dates"]) - set(reference["dates"]))
     if only_ref:
-        result.findings.append(error(f"{len(only_ref)} reference dates not in stats (use --dates-from)",
-                                     details={"dates": only_ref[:20]}))
+        result.findings.append(
+            error(f"{len(only_ref)} reference dates not in stats (use --dates-from)", details={"dates": only_ref[:20]}))
     if only_new:
-        result.findings.append(info(f"{len(only_new)} dates not in reference stats, not compared",
-                                    details={"dates": only_new[:20]}))
+        result.findings.append(
+            info(f"{len(only_new)} dates not in reference stats, not compared", details={"dates": only_new[:20]}))
 
     for name in variables:
         counts = result.counts.setdefault(name, {IDENTICAL: 0, CLOSE: 0, DIFFERS: 0})
@@ -229,8 +275,10 @@ def compare_stats(  # pylint: disable=too-many-locals
             if verdict != IDENTICAL:
                 result.findings.append(_finding(verdict, f"stored {stat}", name, value, ref_value))
         for stat in PER_DATE:
+            if stat not in stats["per_date"][name] or stat not in reference["per_date"][name]:
+                continue  # n_inf, with a format 1 file
             new, ref = stats["per_date"][name][stat], reference["per_date"][name][stat]
-            cells = [(d, new[a], ref[b], _classify(new[a], ref[b], 0.0 if stat == "n_nan" else atol))
+            cells = [(d, new[a], ref[b], _classify(new[a], ref[b], 0.0 if stat in COUNTS else atol))
                      for a, b, d in common]
             for verdict in (IDENTICAL, CLOSE, DIFFERS):
                 counts[verdict] += sum(c[3] == verdict for c in cells)
@@ -238,16 +286,22 @@ def compare_stats(  # pylint: disable=too-many-locals
                 bad = [c for c in cells if c[3] == verdict]
                 if bad:
                     diffs = [abs(x - y) for _, x, y, _ in bad if x is not None and y is not None]
-                    result.findings.append(make(
-                        f"{stat} {verdict} at {len(bad)}/{len(cells)} dates", variable=name,
-                        time=bad[0][0] if len(bad) == 1 else None,
-                        details={"dates": [c[0] for c in bad[:10]], "values": [c[1] for c in bad[:10]],
+                    result.findings.append(
+                        make(f"{stat} {verdict} at {len(bad)}/{len(cells)} dates",
+                             variable=name,
+                             time=bad[0][0] if len(bad) == 1 else None,
+                             details={
+                                 "dates": [c[0] for c in bad[:10]],
+                                 "values": [c[1] for c in bad[:10]],
                                  "reference": [c[2] for c in bad[:10]],
-                                 "max_abs_diff": max(diffs) if diffs else None}))
+                                 "max_abs_diff": max(diffs) if diffs else None
+                             }))
 
     identical = [v for v, c in result.counts.items() if c[CLOSE] == c[DIFFERS] == 0]
-    result.findings.append(info(f"{len(identical)}/{len(variables)} variables identical on "
-                                f"{len(common)} common dates", details={"variables": identical}))
+    result.findings.append(
+        info(f"{len(identical)}/{len(variables)} variables identical on "
+             f"{len(common)} common dates",
+             details={"variables": identical}))
     return result
 
 
@@ -262,5 +316,10 @@ def _classify(value: float | None, reference: float | None, atol: float) -> str:
 def _finding(verdict: str, what: str, variable: str, value: float | None, reference: float | None) -> Finding:
     make = error if verdict == DIFFERS else warning
     diff = abs(value - reference) if value is not None and reference is not None else None
-    return make(f"{what} {verdict}: {value} vs {reference}", variable=variable,
-                details={"value": value, "reference": reference, "abs_diff": diff})
+    return make(f"{what} {verdict}: {value} vs {reference}",
+                variable=variable,
+                details={
+                    "value": value,
+                    "reference": reference,
+                    "abs_diff": diff
+                })

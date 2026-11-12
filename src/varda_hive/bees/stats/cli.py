@@ -3,7 +3,6 @@
 # Distributed under the terms of the BSD 3-Clause License.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
 """stats-bee's extra subcommands: `stats-bee dump` writes a stats file and `stats-bee compare`
 compares two of them. `stats-bee check` is the generic one, see varda_hive/cli.py."""
 from argparse import ArgumentParser, Namespace
@@ -24,7 +23,9 @@ See docs/stats-bee.md for the file layout and how the tolerances work."""
     p.add_argument("dataset", help="path to the anemoi zarr dataset")
     p.add_argument("--spec", help="dataset spec YAML (sampling settings)")
     p.add_argument("--dates-from", metavar="STATS", help="use the dates of this stats file (e.g. the reference)")
-    p.add_argument("-o", "--output", default="-",
+    p.add_argument("-o",
+                   "--output",
+                   default="-",
                    help="output file, YAML for .yaml/.yml, otherwise JSON (default: JSON to stdout)")
 
 

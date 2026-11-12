@@ -32,6 +32,10 @@ tolerances:
   source_rtol: 1.0e-4       # dataset vs source values
   source_atol: 1.0e-4
 
+# Accepted warnings, demoted to INFO: {check: [variables]}, "*" for all variables
+ignore_warnings:
+  statistics_consistent: [insolation]   # diurnal field, a small sample can't resolve its mean
+
 # spot-bee: where the original values come from. "file.py:Class" (relative to
 # this file) or "package.module:Class"; `args` are passed to the constructor.
 source:

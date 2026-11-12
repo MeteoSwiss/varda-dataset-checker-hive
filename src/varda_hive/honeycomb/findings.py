@@ -3,7 +3,6 @@
 # Distributed under the terms of the BSD 3-Clause License.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
 """What a check reports: `Finding`s, collected into a `Report`.
 
 Checks never raise or assert to signal a problem; they yield findings with a
@@ -23,12 +22,14 @@ class Severity(IntEnum):
 
 
 @dataclass(frozen=True)
-class Finding:
+class Finding:  # pylint: disable=too-many-instance-attributes
     severity: Severity
     message: str
     variable: str | None = None
     time: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
+    # The check did not run (or not fully) for lack of input, e.g. a spec field. `--strict` fails on these.
+    skipped: bool = False
     # Filled in by the runner, so checks don't have to repeat their own name.
     bee: str = ""
     check: str = ""
@@ -51,6 +52,11 @@ def info(message: str, **kwargs: Any) -> Finding:
     return Finding(Severity.INFO, message, **kwargs)
 
 
+def skipped(reason: str, **kwargs: Any) -> Finding:
+    """An INFO finding saying the check was skipped; an ERROR under `--strict`."""
+    return Finding(Severity.INFO, f"skipped: {reason}", skipped=True, **kwargs)
+
+
 @dataclass
 class Report:
     dataset: str
@@ -64,13 +70,17 @@ class Report:
     def count(self, severity: Severity) -> int:
         return sum(f.severity == severity for f in self.findings)
 
-    def exit_code(self, fail_on: Severity = Severity.ERROR) -> int:
-        return int(any(f.severity >= fail_on for f in self.findings))
+    def exit_code(self, fail_on: Severity = Severity.ERROR, strict: bool = False) -> int:
+        """1 if any finding reaches `fail_on` (or, with `strict`, any check was skipped), else 0."""
+        return int(any(f.severity >= fail_on or (strict and f.skipped) for f in self.findings))
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "dataset": self.dataset,
             "checks_run": self.checks_run,
-            "summary": {s.name: self.count(s) for s in Severity},
+            "summary": {
+                s.name: self.count(s)
+                for s in Severity
+            },
             "findings": [f.to_dict() for f in self.findings],
         }
