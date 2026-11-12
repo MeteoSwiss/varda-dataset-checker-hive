@@ -1,11 +1,12 @@
 # Example dataset spec for varda-dataset-checker-hive.
-# Copy this into the dataset's own repo (e.g. checks/<dataset>.yaml) and adapt.
-# Every field is optional: checks that need a missing field report "skipped".
-# Unknown keys are rejected, so typos fail loudly.
+# Copy this into the dataset's own repo (e.g. checks/<dataset>.yaml) and adapt, see
+# "Setting up a dataset" in the README. Every field is optional: checks that need a missing
+# field report "skipped" (an error with --strict). Unknown keys are rejected, so typos fail
+# loudly, and files named here must exist.
 
 name: varda-kenda-ch1-2km-2020-2020-1h-v1.0-pl13-test
 
-# meta-bee: expected structure
+# meta-bee: expected structure, from the anemoi recipe
 variables: [T_2M, U_10M, V_10M, T_850]       # exact set of variables
 start_date: 2020-03-01T00:00:00
 end_date: 2020-03-30T23:00:00
@@ -14,9 +15,10 @@ grid_points: 30676
 constant_fields: [FIS, FR_LAND]
 
 # stats-bee: physical ranges per variable (path relative to this file)
-ranges_file: physical_ranges.example.yaml
-# stats-bee: stats file to compare against (written by `stats-bee dump`, committed next to this spec)
-reference_stats: varda-tiny.stats.yaml
+ranges_file: physical_ranges.yaml
+# stats-bee: stats file of the accepted version to compare against. Uncomment once written with
+# `stats-bee dump data.zarr --spec <this file> -o <dataset>.stats.yaml`, committed next to this spec.
+# reference_stats: <dataset>.stats.yaml
 
 # Seeded sampling used by stats-bee and spot-bee
 sampling:
@@ -38,7 +40,8 @@ ignore_warnings:
 
 # spot-bee: where the original values come from. "file.py:Class" (relative to
 # this file) or "package.module:Class"; `args` are passed to the constructor.
-source:
-  plugin: source_plugin_example.py:ZarrSource
-  args:
-    path: /path/to/reference.zarr
+# Uncomment with a real plug-in, see templates/source_plugin_example.py.
+# source:
+#   plugin: source_plugin_example.py:ZarrSource
+#   args:
+#     path: /path/to/reference.zarr

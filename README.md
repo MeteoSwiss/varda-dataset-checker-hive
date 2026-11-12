@@ -84,6 +84,75 @@ The hive is generic. Everything dataset-specific lives in the **dataset's own re
 
   See `templates/source_plugin_example.py`, which reads another zarr.
 
+## Setting up a dataset
+
+The spec is written by hand, once per dataset, and every bee reads the same file. Only the
+reference stats file is generated.
+
+1. **Copy the templates** into the dataset repo:
+
+   ```bash
+   cp templates/spec.example.yaml            <dataset-repo>/checks/<dataset>.yaml
+   cp templates/physical_ranges.example.yaml <dataset-repo>/checks/physical_ranges.yaml
+   ```
+
+2. **Fill in the expected structure** (`variables`, `start_date`, `end_date`, `frequency`,
+   `grid_points`, `constant_fields`) from the anemoi **recipe**, not from the dataset you are
+   about to check. A spec copied from the dataset agrees with it by construction and catches
+   nothing in that build.
+
+3. **Write the ranges file.** Keep the bounds loose: they should catch unit errors and garbage,
+   not unusual weather. Variables without a range are listed as INFO.
+
+4. **Choose the sampling.** `n_dates` random dates (`all` for an exact full pass), plus
+   `include_dates` for time indices you always want checked. Leave the `tolerances` at their
+   defaults unless a check tells you otherwise.
+
+5. **Check the dataset** and review every finding:
+
+   ```bash
+   uv run hive data.zarr --spec checks/<dataset>.yaml
+   ```
+
+   Fix the dataset or the spec. Add a warning to `ignore_warnings` only once you have understood
+   and accepted it, e.g. `statistics_consistent` on insolation, whose diurnal cycle a small
+   sample can't resolve.
+
+6. **Write the reference stats file** once this version of the dataset is accepted:
+
+   ```bash
+   uv run stats-bee dump data.zarr --spec checks/<dataset>.yaml -o checks/<dataset>.stats.yaml
+   ```
+
+   Uncomment `reference_stats: <dataset>.stats.yaml` in the spec, and commit the spec, the ranges
+   file and the stats file.
+
+7. **Gate releases in CI** with `--strict`, see [Release CI](#release-ci). Each rebuild is then
+   compared exactly with the accepted version. See
+   [docs/stats-bee.md](docs/stats-bee.md#stats-files) for the stats file.
+
+### Spec fields
+
+Every field is optional. A check that needs a missing field reports "skipped", which fails the run
+under `--strict`. Unknown keys are rejected, so a typo fails when the spec is loaded. Relative
+paths resolve against the spec file's directory.
+
+| field | used by | meaning |
+|---|---|---|
+| `name` | none | for humans |
+| `variables` | meta-bee | exact set of variables |
+| `start_date`, `end_date`, `frequency`, `grid_points` | meta-bee (planned) | expected dates and grid |
+| `constant_fields` | stats-bee | fields that must not change in time (used when the dataset lists none) |
+| `ranges_file` | stats-bee | YAML of `{variable: {min, max, units}}`, see `templates/physical_ranges.example.yaml` |
+| `reference_stats` | stats-bee | stats file of the accepted version, written by `stats-bee dump` |
+| `sampling` | stats-bee, spot-bee | `seed`, `n_dates` (int or `all`), `n_points` (spot-bee), `include_dates` |
+| `tolerances` | stats-bee, spot-bee | `statistics_rtol`, `z_threshold`, `compare_atol_stdev` (stats-bee); `source_rtol`, `source_atol` (spot-bee) |
+| `source` | spot-bee | source plug-in, see above |
+| `ignore_warnings` | all bees | `{check: [variables]}` (or `"*"` for all variables): warnings demoted to INFO |
+
+`templates/spec.example.yaml` shows every field with its default value, and
+`src/varda_hive/honeycomb/spec.py` is the authoritative schema.
+
 ## Adding a check
 
 ```python
@@ -113,3 +182,13 @@ uv run pylint src/varda_hive
 uv run mypy src/varda_hive
 uv run yapf --diff --recursive src tests
 ```
+
+## Ownership
+
+| role | who |
+|---|---|
+| code owner | Daniel Hupp (see `.github/CODEOWNERS`) |
+| maintainer | open |
+
+Pull requests are reviewed by the code owner or a maintainer. Questions and bug reports: open an issue
+in this repository.

@@ -144,7 +144,7 @@ $ uv run pytest --cov=varda_hive --cov-report=html
    - Complete the checklist in the PR template
    - Ensure all CI checks pass
 
-3. **Code Review**: A maintainer will review your PR. Be prepared to make changes based on feedback
+3. **Code Review**: The code owner or a maintainer (see [Ownership](README.md#ownership)) will review your PR. Be prepared to make changes based on feedback
 
 4. **Merge**: Once approved and all checks pass, a maintainer will merge your PR
 
