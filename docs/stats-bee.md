@@ -116,7 +116,8 @@ names the variable and statistic, not the date. Each value is:
 - *differs*: anything else
 
 With `reference_stats` in the spec, `stats-bee check` (and `hive`) run the same comparison as the
-`matches_reference_stats` check, on the reference's dates.
+`matches_reference_stats` check, on the reference's dates. See [ci.md](ci.md) for the whole publishing workflow
+with all bees.
 
 ## How the tolerances work
 

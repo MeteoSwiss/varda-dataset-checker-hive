@@ -48,20 +48,15 @@ Exit codes:
 
 ## Release CI
 
-Gate a release on the dataset's spec and its committed reference meta and stats files:
+Gate a release on the dataset's spec and its committed reference files, in the dataset repo's CI:
 
 ```bash
-uv run hive $DATASET --spec checks/<dataset>.yaml --strict --report hive.json
+uv run hive $DATASET --spec checks/<dataset>.yaml --strict --report hive.json --format markdown > hive.md
 ```
 
-- `--strict` fails when a check is skipped, e.g. because the spec has no `ranges_file`. Otherwise a
-  misconfigured job stays green.
-- `--report` writes the JSON report as a CI artifact, while the text goes to the log.
-  `--format markdown` gives a summary for a merge request or a CI job summary.
-- On CSCS, use the `.hive-check` job of [`ci/cscs-hive.yml`](ci/cscs-hive.yml): see
-  [docs/meta-bee.md](docs/meta-bee.md#publishing-a-dataset).
-- Known, accepted warnings can be demoted to INFO in the spec, so `--fail-on warning` stays usable:
-  `ignore_warnings: {statistics_consistent: [insolation]}`.
+`--strict` fails when a check is skipped, so a misconfigured job can't stay green. See
+[docs/ci.md](docs/ci.md) for the publishing workflow, the flags and an example CSCS-CI job built on
+[varda-cscs-ci-workflows](https://github.com/MeteoSwiss/varda-cscs-ci-workflows).
 
 ## Findings, not assertions
 

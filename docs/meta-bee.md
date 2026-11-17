@@ -92,20 +92,10 @@ reference_policy:
 ones, which also shows the paths to use in the policy). It exits 1 when a difference reaches
 `--fail-on` (default `error`). `--format json` and `--format markdown` are available, as for every bee.
 
-## Publishing a dataset
+## In CI
 
-1. Write the spec, the variables file and the ranges file from the recipe.
-2. Build the dataset and check it: `hive data.zarr --spec checks/data.yaml`. Review every finding.
-3. Accept it: `meta-bee dump data.zarr -o checks/data.meta.yaml` and
-   `stats-bee dump data.zarr --spec checks/data.yaml -o checks/data.stats.yaml`. Set
-   `reference_meta` and `reference_stats` in the spec and commit all of it.
-4. Every rebuild is gated in CI by one command:
-
-   ```bash
-   hive new.zarr --spec checks/data.yaml --strict --report hive.json --format markdown > hive.md
-   ```
-
-   On CSCS, extend the `.hive-check` job of [`ci/cscs-hive.yml`](../ci/cscs-hive.yml) with `DATASET` and
-   `SPEC`. It keeps `hive.md` (for the merge request) and `hive.json` as artifacts.
-5. When a change is intended (new variable, new period), review `meta-bee compare new.zarr
-   checks/data.meta.yaml`, then dump the new meta file and commit it with the spec change.
+With `reference_meta` in the spec, `hive --strict` (or `meta-bee check`) runs the reference comparison
+as the `matches_reference` check, so a release needs no separate `compare` step. When a change is
+intended (a new variable, a new period), review `meta-bee compare new.zarr checks/data.meta.yaml`,
+then dump the new meta file and commit it with the spec change. See [ci.md](ci.md) for the whole
+workflow and an example CSCS-CI job.
