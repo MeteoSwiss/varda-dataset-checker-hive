@@ -65,6 +65,19 @@ def _dates(path: Path) -> np.ndarray:
     return zarr.open_group(str(path), mode="r")["dates"][:].astype("datetime64[s]")
 
 
+def _with(values: np.ndarray, index: int, value) -> np.ndarray:
+    values = values.copy()
+    values[index] = value
+    return values
+
+
+def _drop_last_date(p: Path) -> None:
+    """One date fewer than time steps in `data`, with consistent date attributes."""
+    d = _dates(p)[:-1].copy()
+    _set_array(p, "dates", d)
+    _attrs(p, end_date=str(d[-1]))
+
+
 def _swap_dates(p: Path) -> None:
     d = _dates(p)
     d[[3, 4]] = d[[4, 3]]
@@ -107,6 +120,12 @@ FAULTS = {
     "lat-out-of-range": (lambda p: _set_array(p, "latitudes", np.linspace(80, 95, NG)), "coordinates_valid"),
     "varmeta-unknown-variable": (lambda p: _varmeta_extra(p), "variables_metadata_consistent"),
     "constant-fields": (_constant_fields, "variables_metadata_consistent"),
+    "dates-nat": (lambda p: _set_array(p, "dates", _with(_dates(p), 2, np.datetime64("NaT", "s"))), "dates_valid"),
+    "lat-not-finite":
+    (lambda p: _set_array(p, "latitudes", _with(np.linspace(45, 48, NG), 7, np.nan)), "coordinates_valid"),
+    "lat-shape": (lambda p: _set_array(p, "latitudes", np.linspace(45, 48, NG - 1)), "shape_consistent"),
+    "stats-shape": (lambda p: _set_array(p, "mean", np.zeros(len(VARIABLES) - 1)), "shape_consistent"),
+    "dates-count": (_drop_last_date, "shape_consistent"),
     # Only visible with a spec or a reference:
     "latlon-swap": (_swap_latlon, None),
     "lat-offset": (lambda p: _set_array(p, "latitudes", np.linspace(45.5, 48.5, NG)), None),
@@ -265,3 +284,48 @@ def test_constant_fields_both_directions(dataset_path):
     _constant_fields(dataset_path)
     findings = [f for f in _findings(dataset_path, Spec()) if f.check == "variables_metadata_consistent"]
     assert {(f.variable, f.severity) for f in findings} == {("FIS", Severity.ERROR), ("T_2M", Severity.ERROR)}
+
+
+def test_duplicate_variable_names(dataset_path):
+    _attrs(dataset_path, variables=["FIS", "T_2M", "T_2M", "U_10M", "V_10M"])
+    findings = [f for f in _findings(dataset_path, Spec()) if f.check == "shape_consistent"]
+    assert [f.message for f in findings] == ["duplicate names in `variables`: ['T_2M']"]
+
+
+def test_metadata_warnings(dataset_path):
+    """Things that are suspicious but not wrong: absent attributes, coordinates that look like radians."""
+    _attrs(dataset_path, start_date=None)
+    _set_array(dataset_path, "latitudes", np.linspace(0.78, 0.84, NG))
+    _set_array(dataset_path, "longitudes", np.linspace(0.08, 0.19, NG))
+    warnings_ = {(f.check, f.message) for f in _findings(dataset_path, Spec()) if f.severity == Severity.WARNING}
+    assert ("date_attrs_consistent", "no `start_date` attribute") in warnings_
+    assert {m
+            for c, m in warnings_ if c == "coordinates_valid"} == {
+                "all `latitudes` within [-3.142, 3.142]: are they in radians?",
+                "all `longitudes` within [-6.283, 6.283]: are they in radians?",
+            }
+
+
+def test_long_list_of_findings_is_capped(tmp_path):
+    path = build_dataset(tmp_path / "long.zarr", nt=15)
+    _set_array(path, "dates", _dates(path)[::-1].copy())
+    findings = [f for f in _findings(path, Spec()) if f.check == "dates_valid"]
+    assert len(findings) == 11 and findings[-1].message == "... and 4 more unordered dates"
+
+
+def test_variables_file_entry_or_key_missing(dataset_path, spec_dir):
+    (spec_dir / "variables.yaml").write_text("T_2M: {param: T_2M, units: K}\nW_SO: {param: W_SO}\n")
+    spec = load_spec(spec_dir / "spec.yaml")
+    findings = [f for f in _findings(dataset_path, spec) if f.check == "variables_metadata_match_spec"]
+    assert {(f.variable, f.message.split(",")[0])
+            for f in findings} == {
+                ("T_2M", "`units` missing from `variables_metadata`"),
+                ("W_SO", "no `variables_metadata` entry to compare with the `variables_file`"),
+            }
+
+
+def test_missing_dates_with_space_separator(dataset_path):
+    """`missing_dates` written as `2020-03-01 03:00:00` are still recognised as dates of the dataset."""
+    _attrs(dataset_path, missing_dates=["2020-03-01 03:00:00"])
+    assert Dataset(dataset_path).missing_indices == {3}
+    assert _error_checks(dataset_path, Spec()) == set()

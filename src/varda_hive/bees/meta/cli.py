@@ -9,7 +9,8 @@ from argparse import ArgumentParser, Namespace
 
 from ...honeycomb import Dataset, Report, Severity, load_spec
 from ...honeycomb.report import to_json, to_markdown
-from .metafile import IDENTICAL, IGNORED, Item, MetaComparison, compare_meta, fingerprint, load_reference, save_meta
+from .metafile import (IDENTICAL, IGNORED, MetaComparison, compare_meta, fingerprint, load_reference, save_meta,
+                       shorten)
 
 
 def _add_dump_args(p: ArgumentParser) -> None:
@@ -50,46 +51,35 @@ this. Exit code 1 if a difference reaches --fail-on. See docs/meta-bee.md."""
     p.add_argument("--all", action="store_true", help="list identical and ignored items too")
 
 
-_MARK = {Severity.ERROR: "ERROR", Severity.WARNING: "WARNING", Severity.INFO: "info"}
+HEADER = ("group", "item", "reference", "dataset", "status")
 
 
-def _cell(value: object, width: int = 48) -> str:
-    text = "" if value is None else str(value)
-    return text if len(text) <= width else text[:width - 3] + "..."
+def _cell(value: object) -> str:
+    return "" if value is None else shorten(value, 48)
 
 
-def _rows(comparison: MetaComparison, show_all: bool) -> list[Item]:
-    rows = [i for i in comparison.items if show_all or i.status not in (IDENTICAL, IGNORED)]
-    return sorted(rows, key=lambda i: (i.group, i.path))
-
-
-def _status(item: Item) -> str:
-    return item.status + (f" ({_MARK[item.severity]})" if item.severity is not None else "")
+def _rows(comparison: MetaComparison, show_all: bool) -> list[tuple[str, ...]]:
+    """One row per item of the compare table (differences only, unless `show_all`), as `HEADER`."""
+    items = sorted((i for i in comparison.items if show_all or i.status not in (IDENTICAL, IGNORED)),
+                   key=lambda i: (i.group, i.path))
+    return [(i.group, i.path, _cell(i.reference), _cell(i.note or i.actual),
+             i.status + (f" ({i.severity.name})" if i.severity is not None else "")) for i in items]
 
 
 def _table(comparison: MetaComparison, show_all: bool) -> str:
-    rows = [(i.group, i.path, _cell(i.reference), _cell(i.note or i.actual), _status(i))
-            for i in _rows(comparison, show_all)]
-    if not rows:
+    if not (rows := _rows(comparison, show_all)):
         return ""
-    header = ("group", "item", "reference", "dataset", "status")
-    widths = [max(len(r[k]) for r in [header, *rows]) for k in range(len(header))]
-    lines = ["  ".join(c.ljust(w) for c, w in zip(row, widths)).rstrip() for row in [header, *rows]]
+    widths = [max(len(r[k]) for r in [HEADER, *rows]) for k in range(len(HEADER))]
+    lines = ["  ".join(c.ljust(w) for c, w in zip(row, widths)).rstrip() for row in [HEADER, *rows]]
     return "\n".join(lines) + "\n"
 
 
 def _markdown_table(comparison: MetaComparison, show_all: bool) -> str:
-
-    def esc(value: object) -> str:
-        return _cell(value).replace("|", "\\|")
-
-    rows = _rows(comparison, show_all)
-    if not rows:
+    if not (rows := _rows(comparison, show_all)):
         return ""
-    lines = ["| group | item | reference | dataset | status |", "|---|---|---|---|---|"]
-    lines += [
-        f"| {i.group} | `{i.path}` | {esc(i.reference)} | {esc(i.note or i.actual)} | {_status(i)} |" for i in rows
-    ]
+    lines = ["| " + " | ".join(HEADER) + " |", "|---" * len(HEADER) + "|"]
+    for group, path, *cells in rows:
+        lines.append("| " + " | ".join([group, f"`{path}`", *(c.replace("|", "\\|") for c in cells)]) + " |")
     return "\n".join(lines) + "\n"
 
 

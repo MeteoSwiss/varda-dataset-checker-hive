@@ -34,6 +34,11 @@ def parse_frequency(value: str | int) -> np.timedelta64:
     raise ValueError(f"not a frequency: {value!r}")
 
 
+def parse_date(value: Any) -> np.datetime64:
+    """A date attribute (`2020-03-01T00:00:00`, `2020-03-01 00:00:00`, trailing `Z`) to the second."""
+    return np.datetime64(str(value).replace(" ", "T").removesuffix("Z"), "s")
+
+
 def format_frequency(step: np.timedelta64) -> str:
     """The shortest anemoi spelling of a step: 3600 s -> `1h`."""
     seconds = int(step / np.timedelta64(1, "s"))
@@ -43,11 +48,15 @@ def format_frequency(step: np.timedelta64) -> str:
     return f"{seconds}s"
 
 
+def is_zarr(path: str | Path) -> bool:
+    return (Path(path) / ".zattrs").is_file()
+
+
 class Dataset:
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
-        if not (self.path / ".zattrs").exists():
+        if not is_zarr(self.path):
             raise FileNotFoundError(f"not a zarr dataset (no .zattrs): {self.path}")
         self.root = zarr.open_group(str(self.path), mode="r")
 
@@ -74,7 +83,7 @@ class Dataset:
     def missing_indices(self) -> frozenset[int]:
         """Time indices listed in the `missing_dates` attribute: anemoi leaves their data unset and
         excludes them from the statistics, so checks must not sample them."""
-        missing = np.array(self.attrs.get("missing_dates") or [], dtype="datetime64[s]")
+        missing = np.array([parse_date(d) for d in self.attrs.get("missing_dates") or []], dtype="datetime64[s]")
         return frozenset(np.flatnonzero(np.isin(self.dates, missing)).tolist())
 
     @cached_property

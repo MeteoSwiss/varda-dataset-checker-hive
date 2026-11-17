@@ -43,6 +43,9 @@ def test_spec_empty_and_strict(write_spec):
     assert load_spec(None) == Spec()
     with pytest.raises(ValidationError):
         load_spec(write_spec("variabels: [T_2M]\n"))  # typo must fail
+    with pytest.raises(ValidationError, match="not a frequency"):
+        load_spec(write_spec("frequency: 1x\n"))
+    assert load_spec(write_spec("frequency: PT6H\n")).frequency == "PT6H"
 
 
 def test_spec_resolves_relative_paths(write_spec, tmp_path):

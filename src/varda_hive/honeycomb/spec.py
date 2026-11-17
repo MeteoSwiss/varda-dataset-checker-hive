@@ -15,8 +15,10 @@ import math
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 import yaml
+
+from .dataset import parse_frequency
 
 
 class _Strict(BaseModel):
@@ -139,6 +141,13 @@ class Spec(_Strict):
     ignore_warnings: dict[str, list[str]] = Field(default_factory=dict)
     # Directory of the spec file; relative paths in the spec resolve against it.
     base_dir: Path = Field(default_factory=Path.cwd, exclude=True)
+
+    @field_validator("frequency")
+    @classmethod
+    def _valid_frequency(cls, value: str | None) -> str | None:
+        if value is not None:
+            parse_frequency(value)  # ValueError -> ValidationError
+        return value
 
 
 def load_spec(path: str | Path | None) -> Spec:

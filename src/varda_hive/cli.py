@@ -27,7 +27,6 @@ from typing import Callable, Sequence
 import yaml
 
 from .bees.meta.cli import SUBCOMMANDS as META_SUBCOMMANDS
-from .bees.meta.metafile import is_zarr
 from .bees.stats.cli import SUBCOMMANDS as STATS_SUBCOMMANDS
 from .honeycomb import BEES, CheckContext, Dataset, Severity, checks_for, load_spec, run
 from .honeycomb.report import to_json, to_markdown, to_text
@@ -76,14 +75,9 @@ def _run_checks(args: Namespace, bees: list[str], prog: str) -> int:
         return EXIT_USAGE
 
     reference = Path(args.reference) if args.reference else None
-    if reference is not None and not reference.exists():
+    if reference is not None and not reference.exists():  # a usage error (exit 2), not a check crash
         raise FileNotFoundError(f"reference not found: {reference}")
-    ctx = CheckContext(
-        dataset=Dataset(args.dataset),
-        spec=load_spec(args.spec),
-        reference=Dataset(reference) if reference is not None and is_zarr(reference) else None,
-        reference_path=reference,
-    )
+    ctx = CheckContext(dataset=Dataset(args.dataset), spec=load_spec(args.spec), reference=reference)
     report = run(ctx, bees=bees, select=args.select)
     if args.report:
         Path(args.report).write_text(to_json(report) + "\n", encoding="utf-8")

@@ -19,14 +19,13 @@ from typing import Any, Iterator
 import numpy as np
 
 from ...honeycomb import CheckContext, Finding, check, error, info, load_ranges, load_variables_file, skipped, warning
-from ...honeycomb.dataset import STATISTICS, Dataset, format_frequency, parse_frequency
+from ...honeycomb.dataset import STATISTICS, Dataset, format_frequency, parse_date, parse_frequency
 from .metafile import compare_meta, fingerprint, load_reference
 
 MAX_LISTED = 10  # findings of one kind before the rest are summarised in one
 
-
-def _date(value: Any) -> np.datetime64:
-    return np.datetime64(str(value).replace(" ", "T").removesuffix("Z"), "s")
+# name, valid range, and the bound under which all values suggest radians
+_COORDINATES = (("latitudes", -90, 90, math.pi), ("longitudes", -180, 360, 2 * math.pi))
 
 
 def _step(ds: Dataset) -> np.timedelta64 | None:
@@ -116,7 +115,7 @@ def date_attrs_consistent(ctx: CheckContext) -> Iterator[Finding]:
         value = ds.attrs.get(key)
         if value is None:
             yield warning(f"no `{key}` attribute")
-        elif _date(value) != actual:
+        elif parse_date(value) != actual:
             yield error(
                 f"`{key}` attribute is {value} but the dates {'start' if key == 'start_date' else 'end'} "
                 f"at {actual}",
@@ -133,7 +132,7 @@ def missing_dates_valid(ctx: CheckContext) -> Iterator[Finding]:
     missing = ds.attrs.get("missing_dates") or []
     dates = set(ds.dates.tolist())
     for value in missing:
-        date = _date(value)
+        date = parse_date(value)
         if date.astype(object) not in dates:
             yield error(f"`missing_dates` lists {value}, which is not one of the dates", time=str(date))
         else:
@@ -174,8 +173,8 @@ def shape_consistent(ctx: CheckContext) -> Iterator[Finding]:
 def coordinates_valid(ctx: CheckContext) -> Iterator[Finding]:
     """Latitudes and longitudes are finite, in range and in degrees."""
     ds = ctx.dataset
-    for name, coords, lo, hi, rad in (("latitudes", ds.latitudes, -90, 90, math.pi), ("longitudes", ds.longitudes, -180,
-                                                                                      360, 2 * math.pi)):
+    for name, lo, hi, rad in _COORDINATES:
+        coords = getattr(ds, name)
         if coords is None:
             yield skipped(f"no `{name}` array")
             continue
@@ -248,7 +247,7 @@ def dates_match_spec(ctx: CheckContext) -> Iterator[Finding]:
         return
     for key, expected, actual in (("start_date", spec.start_date, ds.dates[0]), ("end_date", spec.end_date,
                                                                                  ds.dates[-1])):
-        if expected is not None and _date(expected.isoformat()) != actual:
+        if expected is not None and parse_date(expected.isoformat()) != actual:
             yield error(f"dates {'start' if key == 'start_date' else 'end'} at {actual}, the spec's `{key}` is "
                         f"{expected.isoformat()}")
     if spec.frequency is not None:
@@ -291,8 +290,8 @@ def flags_match_spec(ctx: CheckContext) -> Iterator[Finding]:
     if spec.allow_nans is not None and attrs.get("allow_nans") != spec.allow_nans:
         yield error(f"`allow_nans` is {attrs.get('allow_nans')}, the spec expects {spec.allow_nans}")
     if spec.missing_dates is not None:
-        actual = {_date(d) for d in attrs.get("missing_dates") or []}
-        expected = {_date(d.isoformat()) for d in spec.missing_dates}
+        actual = {parse_date(d) for d in attrs.get("missing_dates") or []}
+        expected = {parse_date(d.isoformat()) for d in spec.missing_dates}
         for d in sorted(actual - expected):
             yield error("date listed in `missing_dates` but not in the spec's", time=str(d))
         for d in sorted(expected - actual):
@@ -350,7 +349,7 @@ def variables_metadata_match_spec(ctx: CheckContext) -> Iterator[Finding]:
 def matches_reference(ctx: CheckContext) -> Iterator[Finding]:
     """Metadata and structure match the reference (`--reference` or the spec's `reference_meta`), a
     meta file or a zarr. Same comparison as `meta-bee compare`."""
-    path = ctx.reference_path or ctx.spec.reference_meta
+    path = ctx.reference or ctx.spec.reference_meta
     if path is None:
         yield skipped("no reference: give `--reference` or `reference_meta` in the spec")
         return

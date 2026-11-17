@@ -109,11 +109,11 @@ def test_order_and_duplicates_notes(tmp_path):
 
 def test_policy_overrides():
     policy = ReferencePolicy(ignore=["variables_metadata.*.mars.date"], error=["constant_fields"], info=["extra_*"])
-    assert severity_of("variables_metadata.T_2M.mars.date", policy) == "ignore"
+    assert severity_of("variables_metadata.T_2M.mars.date", policy) is None
     assert severity_of("variables_metadata.T_2M.mars.param", policy) == Severity.WARNING
     assert severity_of("constant_fields", policy) == Severity.ERROR
     assert severity_of("extra_note", policy) == Severity.INFO
-    assert severity_of("uuid") == "ignore" and severity_of("arrays.dates.values") == Severity.ERROR
+    assert severity_of("uuid") is None and severity_of("arrays.dates.values") == Severity.ERROR
     assert severity_of("something_new") == Severity.WARNING
 
 

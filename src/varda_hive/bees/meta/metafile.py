@@ -30,20 +30,23 @@ from typing import Any, Iterator
 import numpy as np
 
 from ... import __version__
-from ...honeycomb import Dataset, Finding, ReferencePolicy, Severity, error, info, warning
-from ...honeycomb.dataset import STATISTICS, format_frequency
+from ...honeycomb import Dataset, Finding, ReferencePolicy, Severity, info
+from ...honeycomb.dataset import STATISTICS, format_frequency, is_zarr
 from ...honeycomb.files import read_file, save_file
 
 FORMAT = "varda-hive-meta/1"
 IDENTICAL, DIFFERS, ADDED, MISSING, IGNORED = "identical", "differs", "added", "missing", "ignored"
 STATUSES = (IDENTICAL, DIFFERS, ADDED, MISSING, IGNORED)
 
-IGNORE = "ignore"
-# First match wins. Paths not matched are WARNING. Taken from the IGNORE lists of
-# `anemoi-datasets compare`, plus what a rebuild or a library update changes without changing the data.
-DEFAULT_POLICY: list[tuple[str, str | Severity]] = [
+# Arrays holding statistics (`statistics_*` too): their values are not bit-reproducible between builds.
+STATISTICS_ARRAYS = (*STATISTICS, "sums", "squares", "count", "has_nans")
+
+# Severity of a difference, None to ignore it. First match wins; paths not matched are WARNING. Taken
+# from the IGNORE lists of `anemoi-datasets compare`, plus what a rebuild or a library update changes
+# without changing the data.
+DEFAULT_POLICY: list[tuple[str, Severity | None]] = [
     # churn: differs on every build
-    *((p, IGNORE) for p in (
+    *((p, None) for p in (
         "uuid",
         "latest_write_timestamp",
         "provenance_load",
@@ -83,10 +86,10 @@ DEFAULT_POLICY: list[tuple[str, str | Severity]] = [
         "arrays.longitudes.values",
     )),
     # statistics values: rebuilds are not bit-reproducible (stats-bee compares them with tolerances)
-    *((f"arrays.{p}.values", Severity.INFO) for p in (*STATISTICS, "sums", "squares", "count", "has_nans")),
+    *((f"arrays.{p}.values", Severity.INFO) for p in STATISTICS_ARRAYS),
     ("arrays.statistics_*.values", Severity.INFO),
 ]
-_SPEC_ORDER = (("ignore", IGNORE), ("error", Severity.ERROR), ("warning", Severity.WARNING), ("info", Severity.INFO))
+_SPEC_ORDER = (("ignore", None), ("error", Severity.ERROR), ("warning", Severity.WARNING), ("info", Severity.INFO))
 
 # --- the fingerprint -------------------------------------------------------------------------
 
@@ -140,10 +143,6 @@ def save_meta(meta: dict, path: str | Path | None) -> None:
 
 def load_meta(path: str | Path) -> dict:
     return read_file(path, FORMAT, "meta file", "meta-bee dump")
-
-
-def is_zarr(path: str | Path) -> bool:
-    return (Path(path) / ".zattrs").is_file()
 
 
 def load_reference(path: str | Path) -> dict:
@@ -202,14 +201,13 @@ def group_of(path: str) -> str:
     if head in ("field_shape", "resolution", "proj_string", "flatten_grid", "remapping") or array in ("latitudes",
                                                                                                       "longitudes"):
         return "grid"
-    if head.startswith("statistics_") or array in (*STATISTICS, "sums", "squares", "count", "has_nans") \
-            or array.startswith("statistics_"):
+    if head.startswith("statistics_") or array in STATISTICS_ARRAYS or array.startswith("statistics_"):
         return "statistics"
     return "arrays" if head == "arrays" else "attrs"
 
 
-def severity_of(path: str, policy: ReferencePolicy | None = None) -> Severity | str:
-    """Severity of a difference at `path`, or IGNORE."""
+def severity_of(path: str, policy: ReferencePolicy | None = None) -> Severity | None:
+    """Severity of a difference at `path`, None if it is ignored."""
     for key, severity in _SPEC_ORDER:
         if policy is not None and any(fnmatch(path, p) for p in getattr(policy, key)):
             return severity
@@ -226,14 +224,16 @@ def compare_meta(actual: dict, reference: dict, policy: ReferencePolicy | None =
     raw.extend(_compare_arrays(actual.get("arrays", {}), reference.get("arrays", {})))
     counts = (_counts(reference), _counts(actual))
     for path, status, ref, act in raw:
-        severity = None if status == IDENTICAL else severity_of(path, policy)
-        if severity == IGNORE:
+        if status == IDENTICAL:
+            comparison.items.append(Item(path, status, ref, act))
+            continue
+        severity = severity_of(path, policy)
+        if severity is None:
             comparison.items.append(Item(path, IGNORED, ref, act))
             continue
-        assert severity is None or isinstance(severity, Severity)
-        note = _note(path, ref, act, status)
-        if severity is not None and (follows := _follows(path, ref, act, status, counts)):
-            severity, note = min(severity, Severity.INFO), f"{_short(ref)} -> {_short(act)}, follows from {follows}"
+        note = _note(ref, act, status)
+        if follows := _follows(path, ref, act, status, counts):
+            severity, note = Severity.INFO, f"{shorten(ref)} -> {shorten(act)}, follows from {follows}"
         comparison.items.append(Item(path, status, ref, act, severity, note))
     return comparison
 
@@ -315,23 +315,22 @@ def _describe_array(entry: dict) -> str:
     return f"{entry.get('dtype')} {tuple(entry.get('shape', ()))}"
 
 
-def _note(path: str, reference: Any, actual: Any, status: str) -> str:
+def _note(reference: Any, actual: Any, status: str) -> str:
     """What changed in a list, e.g. the variables: added and missing elements, or only the order."""
-    del path
     if status != DIFFERS or not _str_list(reference) or not _str_list(actual):
         return ""
     ref_set, act_set = set(reference), set(actual)
     parts = []
     if added := [x for x in actual if x not in ref_set]:
-        parts.append(f"added {_short(added)}")
+        parts.append(f"added {shorten(added)}")
     if missing := [x for x in reference if x not in act_set]:
-        parts.append(f"missing {_short(missing)}")
+        parts.append(f"missing {shorten(missing)}")
     if not parts:
         if len(reference) != len(actual):
             parts.append(f"same elements, length {len(reference)} -> {len(actual)} (duplicates)")
         else:
             moved = [r for r, a in zip(reference, actual) if r != a]
-            parts.append(f"same elements, order differs: {_short(moved)}")
+            parts.append(f"same elements, order differs: {shorten(moved)}")
     return "; ".join(parts)
 
 
@@ -339,7 +338,8 @@ def _str_list(value: Any) -> bool:
     return isinstance(value, list) and all(isinstance(x, str) for x in value)
 
 
-def _short(value: Any, width: int = 60) -> str:
+def shorten(value: Any, width: int = 60) -> str:
+    """`value` as text, cut to `width` characters."""
     text = str(value)
     return text if len(text) <= width else text[:width - 3] + "..."
 
@@ -347,18 +347,11 @@ def _short(value: Any, width: int = 60) -> str:
 def _finding(item: Item) -> Finding:
     assert item.severity is not None
     if item.status == ADDED:
-        message = f"{item.path}: not in the reference ({_short(item.actual)})"
+        message = f"{item.path}: not in the reference ({shorten(item.actual)})"
     elif item.status == MISSING:
-        message = f"{item.path}: missing, the reference has {_short(item.reference)}"
+        message = f"{item.path}: missing, the reference has {shorten(item.reference)}"
     else:
-        change = item.note or f"{_short(item.reference, 100)} -> {_short(item.actual, 100)}"
+        change = item.note or f"{shorten(item.reference, 100)} -> {shorten(item.actual, 100)}"
         message = f"{item.path} differs from the reference: {change}"
-    make = {Severity.ERROR: error, Severity.WARNING: warning, Severity.INFO: info}[item.severity]
-    return make(message,
-                variable=item.variable,
-                details={
-                    "path": item.path,
-                    "status": item.status,
-                    "reference": item.reference,
-                    "actual": item.actual
-                })
+    details = {"path": item.path, "status": item.status, "reference": item.reference, "actual": item.actual}
+    return Finding(item.severity, message, variable=item.variable, details=details)

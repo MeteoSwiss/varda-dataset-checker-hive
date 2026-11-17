@@ -18,6 +18,7 @@ def test_config_errors_exit_2(dataset_path, write_spec, tmp_path, capsys):
     assert hive_main([str(dataset_path), "--spec", str(write_spec("variabels: [T_2M]\n"))]) == 2
     assert hive_main([str(dataset_path), "--spec", str(tmp_path / "nope.yaml")]) == 2
     assert hive_main([str(dataset_path), "--select", "no_nan"]) == 2
+    assert hive_main([str(dataset_path), "--spec", str(write_spec("frequency: 1x\n"))]) == 2
     assert stats_bee_main(["compare", str(tmp_path / "a.yaml"), str(tmp_path / "b.yaml")]) == 2
     err = capsys.readouterr().err
     assert "Traceback" not in err and "unknown check(s) no_nan" in err

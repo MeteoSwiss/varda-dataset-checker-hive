@@ -27,8 +27,7 @@ BEES = ("meta", "stats", "spot")
 class CheckContext:
     dataset: Dataset
     spec: Spec
-    reference: Dataset | None = None  # the reference, when it is a zarr
-    reference_path: Path | None = None  # the reference as given: a zarr or a meta file (meta-bee)
+    reference: Path | None = None  # `--reference`: a zarr or a meta file (meta-bee)
     cache: dict = field(default_factory=dict)  # shared between checks of one run, e.g. a loaded source
 
 
