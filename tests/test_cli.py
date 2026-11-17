@@ -51,3 +51,38 @@ def test_dump_writes_valid_json_with_inf(dataset_path, tmp_path):
     assert stats["format"] == "varda-hive-stats/4" and stats["sample"]["T_2M"]["n_inf"] == len(
         stats["sampling"]["dates"])
     assert stats_bee_main(["check", str(dataset_path), "--select", "finite_values"]) == 1
+
+
+def test_meta_bee_dump_and_compare(dataset_path, tmp_path, capsys):
+    from varda_hive.cli import meta_bee_main
+
+    ref = tmp_path / "ref.meta.yaml"
+    assert meta_bee_main(["dump", str(dataset_path), "-o", str(ref)]) == 0
+    assert meta_bee_main(["compare", str(dataset_path), str(ref)]) == 0
+    out = capsys.readouterr().out
+    assert "identical" in out and "0 error" in out
+    assert meta_bee_main(["compare", str(dataset_path), str(ref), "--all"]) == 0
+    assert "arrays.dates.values" in capsys.readouterr().out
+
+    metadata = json.loads((dataset_path / ".zattrs").read_text())
+    metadata["variables"][1], metadata["variables"][2] = metadata["variables"][2], metadata["variables"][1]
+    metadata["variables_metadata"]["T_850"]["mars"]["levelist"] = 800
+    (dataset_path / ".zattrs").write_text(json.dumps(metadata))
+    assert meta_bee_main(["compare", str(dataset_path), str(ref)]) == 1
+    out = capsys.readouterr().out
+    assert "order differs" in out and "variables_metadata.T_850.mars.levelist" in out
+    assert meta_bee_main(["compare", str(dataset_path), str(ref), "--format", "json"]) == 1
+    assert json.loads(capsys.readouterr().out)["summary"]["ERROR"] == 1
+    assert meta_bee_main(["compare", str(dataset_path), str(ref), "--format", "markdown"]) == 1
+    assert "| variables | `variables` |" in capsys.readouterr().out
+
+    # --reference with a meta file, in check and hive
+    assert meta_bee_main(["check", str(dataset_path), "--reference", str(ref), "--select", "matches_reference"]) == 1
+    assert hive_main([str(dataset_path), "--reference", str(tmp_path / "nope.yaml")]) == 2
+    assert meta_bee_main(["compare", str(dataset_path), str(tmp_path / "nope.yaml")]) == 2
+
+
+def test_markdown_report(dataset_path, capsys):
+    assert hive_main([str(dataset_path), "--format", "markdown"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("### varda-hive: passed") and "<details>" in out

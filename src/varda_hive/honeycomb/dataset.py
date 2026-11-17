@@ -8,12 +8,39 @@ anemoi-datasets, so checks see exactly what is stored on disk."""
 from functools import cached_property
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 import numpy as np
 import zarr
 
 STATISTICS = ("mean", "stdev", "minimum", "maximum")
+
+_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+_ISO = re.compile(r"^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$")
+
+
+def parse_frequency(value: str | int) -> np.timedelta64:
+    """An anemoi frequency as a timedelta: `1h`, `30m`, `1d`, an ISO 8601 duration (`PT6H`), or an int
+    number of hours. ValueError for anything else."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return np.timedelta64(value * 3600, "s")
+    text = str(value).strip()
+    if m := re.fullmatch(r"(\d+)\s*([smhd])", text):
+        return np.timedelta64(int(m[1]) * _UNITS[m[2]], "s")
+    if (m := _ISO.match(text.upper())) and any(m.groups()):
+        days, hours, minutes, seconds = (int(g or 0) for g in m.groups())
+        return np.timedelta64(((days * 24 + hours) * 60 + minutes) * 60 + seconds, "s")
+    raise ValueError(f"not a frequency: {value!r}")
+
+
+def format_frequency(step: np.timedelta64) -> str:
+    """The shortest anemoi spelling of a step: 3600 s -> `1h`."""
+    seconds = int(step / np.timedelta64(1, "s"))
+    for unit in ("d", "h", "m"):
+        if seconds and seconds % _UNITS[unit] == 0:
+            return f"{seconds // _UNITS[unit]}{unit}"
+    return f"{seconds}s"
 
 
 class Dataset:
@@ -50,6 +77,14 @@ class Dataset:
         missing = np.array(self.attrs.get("missing_dates") or [], dtype="datetime64[s]")
         return frozenset(np.flatnonzero(np.isin(self.dates, missing)).tolist())
 
+    @cached_property
+    def latitudes(self) -> np.ndarray | None:
+        return self.root["latitudes"][:] if "latitudes" in self.arrays else None
+
+    @cached_property
+    def longitudes(self) -> np.ndarray | None:
+        return self.root["longitudes"][:] if "longitudes" in self.arrays else None
+
     def date_str(self, t: int) -> str:
         return str(self.dates[t])
 
@@ -65,6 +100,6 @@ class Dataset:
     def statistic(self, name: str) -> np.ndarray:
         return self.root[name][:]
 
-    @property
+    @cached_property
     def arrays(self) -> list[str]:
         return sorted(self.root.array_keys())

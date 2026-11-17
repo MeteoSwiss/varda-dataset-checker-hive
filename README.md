@@ -6,7 +6,7 @@ A hive of slim tools ("bees") that check anemoi datasets for faults. Each bee co
 
 | command | layer | reads |
 |---|---|---|
-| `meta-bee` | metadata and structure: variables, dates, frequency, grid, reference diff | `.zattrs` and small arrays only |
+| `meta-bee` | metadata and structure: internal consistency, variables, dates, frequency, grid, per-variable metadata, reference diff ([docs](docs/meta-bee.md)) | `.zattrs` and small arrays only |
 | `stats-bee` | values: NaNs, constant fields, physical ranges, stored vs recomputed statistics, reference stats file ([docs](docs/stats-bee.md)) | sampled time steps |
 | `spot-bee` | sampled (time, variable, grid points) vs the original source | sampled time steps + source |
 | `hive` | runs all bees and merges their findings | |
@@ -19,8 +19,8 @@ All of them share the same core, the `honeycomb`:
 - seeded sampling
 - the `Source` interface
 
-> Status: the stats-bee is implemented; meta-bee and spot-bee still have one template check each
-> (`variables_match_spec`, `matches_source`).
+> Status: stats-bee and meta-bee are implemented; spot-bee still has one template check
+> (`matches_source`).
 
 ## Usage
 
@@ -29,10 +29,12 @@ uv sync
 uv run hive <dataset.zarr> --spec <spec.yaml>          # all bees
 uv run meta-bee check <dataset.zarr> --spec <spec.yaml>   # one bee
 uv run hive --list                                     # available checks
+uv run meta-bee dump <dataset.zarr> -o meta.yaml       # meta file (metadata + structure)
+uv run meta-bee compare <dataset.zarr> meta.yaml       # metadata: what is identical, what differs
 uv run stats-bee dump <dataset.zarr> --spec <spec.yaml> -o stats.yaml   # stats file
 uv run stats-bee compare stats.yaml reference.yaml     # what is identical, what differs
 uv run stats-bee calibrate <dataset.zarr> --spec <spec.yaml> -o tolerances.yaml   # calibrated tolerances
-uv run hive <dataset.zarr> --spec <spec.yaml> --format json --fail-on warning
+uv run hive <dataset.zarr> --spec <spec.yaml> --format json --fail-on warning   # or --format markdown
 ```
 
 Exit codes:
@@ -46,7 +48,7 @@ Exit codes:
 
 ## Release CI
 
-Gate a release on the dataset's spec and its committed reference stats file:
+Gate a release on the dataset's spec and its committed reference meta and stats files:
 
 ```bash
 uv run hive $DATASET --spec checks/<dataset>.yaml --strict --report hive.json
@@ -55,6 +57,9 @@ uv run hive $DATASET --spec checks/<dataset>.yaml --strict --report hive.json
 - `--strict` fails when a check is skipped, e.g. because the spec has no `ranges_file`. Otherwise a
   misconfigured job stays green.
 - `--report` writes the JSON report as a CI artifact, while the text goes to the log.
+  `--format markdown` gives a summary for a merge request or a CI job summary.
+- On CSCS, use the `.hive-check` job of [`ci/cscs-hive.yml`](ci/cscs-hive.yml): see
+  [docs/meta-bee.md](docs/meta-bee.md#publishing-a-dataset).
 - Known, accepted warnings can be demoted to INFO in the spec, so `--fail-on warning` stays usable:
   `ignore_warnings: {statistics_consistent: [insolation]}`.
 
@@ -95,10 +100,12 @@ reference stats file is generated.
    ```bash
    cp templates/spec.example.yaml            <dataset-repo>/checks/<dataset>.yaml
    cp templates/physical_ranges.example.yaml <dataset-repo>/checks/physical_ranges.yaml
+   cp templates/variables.example.yaml       <dataset-repo>/checks/variables.yaml
    ```
 
 2. **Fill in the expected structure** (`variables`, `start_date`, `end_date`, `frequency`,
-   `grid_points`, `constant_fields`) from the anemoi **recipe**, not from the dataset you are
+   `grid_points`, `resolution`, `bbox`, `allow_nans`, `missing_dates`, `constant_fields`, and the
+   per-variable mars keys in the variables file) from the anemoi **recipe**, not from the dataset you are
    about to check. A spec copied from the dataset agrees with it by construction and catches
    nothing in that build.
 
@@ -123,18 +130,19 @@ reference stats file is generated.
    and accepted it, e.g. `statistics_consistent` on insolation, whose diurnal cycle a small
    sample can't resolve.
 
-6. **Write the reference stats file** once this version of the dataset is accepted:
+6. **Write the reference meta and stats files** once this version of the dataset is accepted:
 
    ```bash
+   uv run meta-bee dump data.zarr -o checks/<dataset>.meta.yaml
    uv run stats-bee dump data.zarr --spec checks/<dataset>.yaml -o checks/<dataset>.stats.yaml
    ```
 
-   Uncomment `reference_stats: <dataset>.stats.yaml` in the spec, and commit the spec, the ranges
-   file and the stats file.
+   Uncomment `reference_meta: <dataset>.meta.yaml` and `reference_stats: <dataset>.stats.yaml` in the
+   spec, and commit the spec, the ranges and variables files, and the meta and stats files.
 
 7. **Gate releases in CI** with `--strict`, see [Release CI](#release-ci). Each rebuild is then
-   compared exactly with the accepted version. See
-   [docs/stats-bee.md](docs/stats-bee.md#stats-files) for the stats file.
+   compared with the accepted version. See [docs/meta-bee.md](docs/meta-bee.md) for the meta file
+   and [docs/stats-bee.md](docs/stats-bee.md#stats-files) for the stats file.
 
 ### Spec fields
 
@@ -146,9 +154,14 @@ paths resolve against the spec file's directory.
 |---|---|---|
 | `name` | none | for humans |
 | `variables` | meta-bee | exact set of variables |
-| `start_date`, `end_date`, `frequency`, `grid_points` | meta-bee (planned) | expected dates and grid |
+| `start_date`, `end_date`, `frequency` | meta-bee | expected first and last date, and step |
+| `grid_points`, `resolution`, `bbox` | meta-bee | expected grid size, `resolution` attribute, extent `{lat_min, lat_max, lon_min, lon_max, tolerance}` |
+| `allow_nans`, `missing_dates` | meta-bee | expected flags |
+| `variables_file` | meta-bee | YAML of `{variable: {param, levtype, levelist, ...}}`, see `templates/variables.example.yaml` |
+| `reference_meta` | meta-bee | meta file (`meta-bee dump`) or zarr of the accepted version |
+| `reference_policy` | meta-bee | `{ignore, error, warning, info: [path globs]}`: severity of differences to the reference |
 | `constant_fields` | stats-bee | fields that must not change in time (used when the dataset lists none) |
-| `ranges_file` | stats-bee | YAML of `{variable: {min, max, units}}`, see `templates/physical_ranges.example.yaml` |
+| `ranges_file` | stats-bee, meta-bee | YAML of `{variable: {min, max, units}}`, see `templates/physical_ranges.example.yaml`; meta-bee checks the units |
 | `reference_stats` | stats-bee | stats file of the accepted version, written by `stats-bee dump` |
 | `calibrated_tolerances` | stats-bee | tolerance file for `statistics_consistent`, written by `stats-bee calibrate` |
 | `sampling` | stats-bee, spot-bee | `seed`, `n_dates` and `n_points` (int or `all`), `include_dates`; the same dates x points for both bees |
@@ -178,7 +191,7 @@ clean synthetic dataset and fires on a broken one, as in `tests/test_bees.py`.
 
 ```bash
 uv sync && uv run pytest
-uv run pytest -m faulty    # stats-bee on Varda-tiny and its faulty variants (needs /scratch)
+uv run pytest -m faulty    # stats-bee and meta-bee on Varda-tiny and its faulty variants (needs /scratch)
 ```
 
 Quality tools:

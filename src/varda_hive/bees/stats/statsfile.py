@@ -28,18 +28,17 @@ round-trips exactly, and NaN/inf as null. Dates in the dataset's `missing_dates`
 """
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-import json
 import math
 from pathlib import Path
 from typing import Any, Callable
 import warnings
 
 import numpy as np
-import yaml
 
 from ... import __version__
 from ...honeycomb import Dataset, Finding, Spec, error, info, warning
 from ...honeycomb.dataset import STATISTICS
+from ...honeycomb.files import read_file, save_file
 from ...honeycomb.sampling import random_time_indices, sample_points
 
 FORMAT = "varda-hive-stats/4"
@@ -336,40 +335,13 @@ def compute_stats(ds: Dataset, spec: Spec, dates_from: dict | None = None) -> di
     return stats_file(ds, spec, compute_sample(ds, spec, dates_from), dates_from)
 
 
-YAML_SUFFIXES = (".yaml", ".yml")
-_Dumper = getattr(yaml, "CSafeDumper", yaml.SafeDumper)
-_Loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
-
-
 def save_stats(stats: dict, path: str | Path | None) -> None:
-    """Write YAML to a `.yaml`/`.yml` path, JSON to any other path, JSON to stdout if it is None or "-".
-
-    YAML: dicts in block style, every list on one line, so a diff shows which variable and
-    statistic changed. Also used for tolerance files."""
-    if path not in (None, "-") and Path(path).suffix in YAML_SUFFIXES:
-        text = yaml.dump(stats, Dumper=_Dumper, sort_keys=False, default_flow_style=None, width=120)
-    else:
-        text = json.dumps(stats, indent=1, allow_nan=False) + "\n"
-    if path in (None, "-"):
-        print(text, end="")
-    else:
-        Path(path).write_text(text, encoding="utf-8")
-
-
-def read_file(path: str | Path, fmt: str, what: str) -> dict:
-    """Load a YAML/JSON file written by `save_stats` and check its `format`."""
-    text = Path(path).read_text(encoding="utf-8")
-    content = yaml.load(text, Loader=_Loader) if Path(path).suffix in YAML_SUFFIXES else json.loads(text)
-    found = content.get("format") if isinstance(content, dict) else None
-    if found != fmt:
-        hint = " (an older stats file: regenerate it with `stats-bee dump`)" if str(found).startswith(
-            "varda-hive-stats/") else ""
-        raise ValueError(f"{path}: not a {what} of format {fmt!r}, found {found!r}{hint}")
-    return content
+    """Write a stats (or tolerance) file, see `honeycomb.files.save_file`."""
+    save_file(stats, path)
 
 
 def load_stats(path: str | Path) -> dict:
-    return read_file(path, FORMAT, "stats file")
+    return read_file(path, FORMAT, "stats file", "stats-bee dump")
 
 
 # --- comparing two stats files ---------------------------------------------------------------

@@ -15,6 +15,14 @@ VARIABLES = ["FIS", "T_2M", "T_850", "U_10M", "V_10M"]
 NT, NG = 8, 50
 
 
+def _mars(variable: str) -> dict:
+    """mars keys like anemoi writes them: T_850 is T on pressure level 850."""
+    name, _, level = variable.rpartition("_")
+    if level.isdigit():
+        return {"param": name, "levtype": "pl", "levelist": int(level)}
+    return {"param": variable, "levtype": "sfc"}
+
+
 def build_dataset(path: Path, variables=VARIABLES, seed: int = 42, nt: int = NT) -> Path:
     """Small anemoi-like zarr v2 dataset: data (time, variable, 1, grid) + metadata.
     Fields drift in time; the first variable (FIS) is a constant field."""
@@ -44,6 +52,17 @@ def build_dataset(path: Path, variables=VARIABLES, seed: int = 42, nt: int = NT)
         "constant_fields": list(variables[:1]),
         "field_shape": [NG],
         "shape": list(data.shape),
+        "missing_dates": [],
+        "resolution": "2km",
+        "variables_metadata": {
+            v: {
+                "mars": _mars(v),
+                **({
+                    "constant_in_time": True
+                } if v == variables[0] else {})
+            }
+            for v in variables
+        },
     }
     (path / ".zattrs").write_text(json.dumps(attrs))
     return path

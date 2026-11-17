@@ -90,3 +90,99 @@ def test_clean_has_no_errors(spec):
 @pytest.mark.parametrize("scenario", sorted(EXPECTED))
 def test_fault_detected(scenario, spec):
     assert EXPECTED[scenario] <= _error_checks(_path(scenario), spec)
+
+
+# --- meta-bee ---------------------------------------------------------------------------------
+
+# scenario -> meta checks expected to report an ERROR, with a full spec and the clean dataset's meta file
+META_EXPECTED = {
+    "m-varmeta-level": {"variables_metadata_match_spec"},
+    "m-varmeta-param": {"variables_metadata_match_spec"},
+    "m-variables-swap": {"matches_reference"},
+    "m-constant-fields": {"variables_metadata_consistent"},
+    "m-frequency": {"frequency_consistent", "matches_reference"},
+    "m-dates-attr": {"date_attrs_consistent", "matches_reference"},
+    "m-missing-dates": {"flags_match_spec"},
+    "m-field-shape": {"shape_consistent", "matches_reference"},
+    "m-latlon-offset": {"grid_matches_spec", "matches_reference"},
+    "m-latlon-swap": {"grid_matches_spec", "matches_reference"},
+    "m-dates-swap": {"dates_valid", "matches_reference"},
+    "m-dates-duplicate": {"dates_valid", "matches_reference"},
+    "a-extra-variable": {"variables_match_spec", "matches_reference"},
+    "a-extra-level": {"variables_match_spec", "matches_reference"},
+    "a-extra-timesteps": {"dates_match_spec", "matches_reference"},
+    "x-meta-data": {"variables_metadata_match_spec"},
+    "x-meta-extra": {"frequency_consistent", "dates_match_spec", "matches_reference"},
+    "x-everything": {"variables_metadata_consistent", "variables_match_spec", "matches_reference"},
+}
+# scenario -> meta checks expected to report a WARNING (differences only the reference sees)
+META_WARNINGS = {
+    "m-stats-dates": {"matches_reference"},  # the ERROR is stats-bee's statistics_window_valid
+    "a-extra-attr": {"matches_reference"},
+}
+
+
+@pytest.fixture(scope="module")
+def meta_spec(tmp_path_factory):
+    """A full spec written from the clean dataset (in a real repo it comes from the recipe)."""
+    import yaml  # pylint: disable=import-outside-toplevel
+
+    from varda_hive.bees.meta.metafile import fingerprint, save_meta  # pylint: disable=import-outside-toplevel
+
+    tmp = tmp_path_factory.mktemp("meta")
+    ds = Dataset(CLEAN)
+    attrs = ds.attrs
+    variables = {
+        v: ({
+            k: m["mars"][k]
+            for k in ("param", "levtype", "levelist") if k in m["mars"]
+        } if "mars" in m else {})
+        for v, m in attrs["variables_metadata"].items()
+    }
+    (tmp / "variables.yaml").write_text(yaml.safe_dump(variables))
+    save_meta(fingerprint(ds), tmp / "reference.meta.yaml")
+    spec = {
+        "variables": attrs["variables"],
+        "start_date": attrs["start_date"],
+        "end_date": attrs["end_date"],
+        "frequency": attrs["frequency"],
+        "grid_points": int(ds.data.shape[-1]),
+        "resolution": attrs["resolution"],
+        "bbox": {
+            "lat_min": float(ds.latitudes.min()),
+            "lat_max": float(ds.latitudes.max()),
+            "lon_min": float(ds.longitudes.min()),
+            "lon_max": float(ds.longitudes.max()),
+        },
+        "allow_nans": attrs["allow_nans"],
+        "missing_dates": [],
+        "variables_file": "variables.yaml",
+        "reference_meta": "reference.meta.yaml",
+    }
+    (tmp / "spec.yaml").write_text(yaml.safe_dump(spec))
+    return load_spec(tmp / "spec.yaml")
+
+
+def _meta_checks(path, spec, severity):
+    report = run(CheckContext(Dataset(path), spec), bees=["meta"])
+    return {f.check for f in report.findings if f.severity == severity}
+
+
+def test_meta_clean(meta_spec):
+    assert _meta_checks(CLEAN, meta_spec, Severity.ERROR) == set()
+    assert _meta_checks(CLEAN, meta_spec, Severity.WARNING) == set()
+
+
+@pytest.mark.parametrize("scenario", sorted(META_EXPECTED))
+def test_meta_fault_detected(scenario, meta_spec):
+    assert META_EXPECTED[scenario] <= _meta_checks(_path(scenario), meta_spec, Severity.ERROR)
+
+
+@pytest.mark.parametrize("scenario", sorted(META_WARNINGS))
+def test_meta_fault_warned(scenario, meta_spec):
+    assert META_WARNINGS[scenario] <= _meta_checks(_path(scenario), meta_spec, Severity.WARNING)
+
+
+@pytest.mark.parametrize("scenario", sorted(s for s in EXPECTED if s.startswith("d-")))
+def test_meta_no_false_positive_on_data_faults(scenario, meta_spec):
+    assert _meta_checks(_path(scenario), meta_spec, Severity.ERROR) == set()

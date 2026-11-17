@@ -6,13 +6,30 @@
 
 name: varda-kenda-ch1-2km-2020-2020-1h-v1.0-pl13-test
 
-# meta-bee: expected structure, from the anemoi recipe
+# meta-bee: expected structure, from the anemoi recipe (consistency checks need nothing)
 variables: [T_2M, U_10M, V_10M, T_850]       # exact set of variables
 start_date: 2020-03-01T00:00:00
 end_date: 2020-03-30T23:00:00
 frequency: 1h
 grid_points: 30676
+resolution: 2km                              # the `resolution` attribute
+bbox: {lat_min: 45.43, lat_max: 48.19, lon_min: 5.25, lon_max: 11.03, tolerance: 0.01}   # grid extent, degrees
+allow_nans: false
+missing_dates: []                            # dates the dataset may list as missing
 constant_fields: [FIS, FR_LAND]
+# meta-bee: expected mars param/levtype/levelist per variable, see variables.example.yaml
+variables_file: variables.yaml
+# meta-bee: reference of the accepted version, to compare metadata and structure with. Uncomment
+# once written with `meta-bee dump data.zarr -o <dataset>.meta.yaml`, committed next to this spec
+# (a path to a zarr works too).
+# reference_meta: <dataset>.meta.yaml
+# meta-bee: change the severity of differences to the reference (globs on the dotted path, see
+# `meta-bee compare --all`). Defaults: structure ERROR, other metadata WARNING, churn ignored.
+reference_policy:
+  ignore: [variables_metadata.*.mars.date]   # the build date of each field
+  error: []
+  warning: []
+  info: []
 
 # stats-bee: physical ranges per variable (path relative to this file)
 ranges_file: physical_ranges.yaml

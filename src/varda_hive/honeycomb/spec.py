@@ -69,6 +69,45 @@ def load_ranges(path: Path) -> dict[str, PhysicalRange]:
     return {str(name): PhysicalRange(**(bounds or {})) for name, bounds in raw.items()}
 
 
+class BBox(_Strict):
+    """Expected extent of the grid in degrees: the min/max of the latitudes and longitudes."""
+    lat_min: float
+    lat_max: float
+    lon_min: float
+    lon_max: float
+    # Allowed |difference| in degrees for each of the four bounds.
+    tolerance: float = 0.01
+
+
+class ReferencePolicy(_Strict):
+    """Overrides of the default severity of a difference to the reference (meta-bee). Each entry is
+    a glob on the dotted path of the item, e.g. `variables_metadata.*.mars.date` or `arrays.sums.*`.
+    Checked in this order (ignore, error, warning, info) before the defaults."""
+    ignore: list[str] = Field(default_factory=list)
+    error: list[str] = Field(default_factory=list)
+    warning: list[str] = Field(default_factory=list)
+    info: list[str] = Field(default_factory=list)
+
+
+Scalar = str | int | float | bool | None
+
+
+def load_variables_file(path: Path) -> dict[str, dict[str, Scalar]]:
+    """Read and validate a `variables_file`: {variable: {key: value}}, e.g. {T_850: {param: T,
+    levtype: pl, levelist: 850}}. Keys are free (they follow the dataset's variables_metadata), values
+    must be scalars."""
+    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path}: expected a mapping of variable -> {{key: value}}")
+    out: dict[str, dict[str, Scalar]] = {}
+    for name, entry in raw.items():
+        entry = entry or {}
+        if not isinstance(entry, dict) or any(isinstance(v, (dict, list)) for v in entry.values()):
+            raise ValueError(f"{path}: {name}: expected a mapping of key -> scalar value")
+        out[str(name)] = {str(k): v for k, v in entry.items()}
+    return out
+
+
 class Spec(_Strict):
     name: str | None = None
     variables: list[str] | None = None
@@ -76,12 +115,22 @@ class Spec(_Strict):
     end_date: datetime | None = None
     frequency: str | None = None
     grid_points: int | None = None
+    resolution: str | None = None
+    bbox: BBox | None = None
+    allow_nans: bool | None = None
+    # Expected `missing_dates` attribute, usually [].
+    missing_dates: list[datetime] | None = None
+    # Expected per-variable metadata (mars param, levtype, levelist, ...), see load_variables_file.
+    variables_file: Path | None = None
     constant_fields: list[str] | None = None
     ranges_file: Path | None = None
     # Stats file (written by `stats-bee dump`) to compare against, e.g. committed in the dataset repo.
     reference_stats: Path | None = None
     # Tolerance file (written by `stats-bee calibrate`) for statistics_consistent.
     calibrated_tolerances: Path | None = None
+    # meta-bee: reference to compare the structure with, a meta file (`meta-bee dump`) or a zarr.
+    reference_meta: Path | None = None
+    reference_policy: ReferencePolicy = Field(default_factory=ReferencePolicy)
     sampling: Sampling = Field(default_factory=Sampling)
     tolerances: Tolerances = Field(default_factory=Tolerances)
     source: SourceSpec | None = None
@@ -100,15 +149,18 @@ def load_spec(path: str | Path | None) -> Spec:
     path = Path(path)
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     spec = Spec(**raw, base_dir=path.resolve().parent)
-    for key in ("ranges_file", "reference_stats", "calibrated_tolerances"):
+    for key in ("ranges_file", "reference_stats", "calibrated_tolerances", "variables_file", "reference_meta"):
         value = getattr(spec, key)
         if value is None:
             continue
         if not value.is_absolute():
             value = spec.base_dir / value
             setattr(spec, key, value)
-        if not value.is_file():
+        # reference_meta may be a zarr directory
+        if not (value.exists() if key == "reference_meta" else value.is_file()):
             raise FileNotFoundError(f"{path}: {key} not found: {value}")
     if spec.ranges_file is not None:
         load_ranges(spec.ranges_file)
+    if spec.variables_file is not None:
+        load_variables_file(spec.variables_file)
     return spec

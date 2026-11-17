@@ -6,8 +6,8 @@
 """Command-line entry points:
 - `hive <dataset>` runs all bees
 - `meta-bee check`, `stats-bee check` and `spot-bee check` run one bee each, with the same options
-- extra subcommands of a bee, like `stats-bee dump` and `stats-bee compare`, live in the bee's own
-  `cli.py` (see varda_hive/bees/stats/cli.py)
+- extra subcommands of a bee, like `stats-bee dump` or `meta-bee compare`, live in the bee's own
+  `cli.py` (see varda_hive/bees/stats/cli.py and varda_hive/bees/meta/cli.py)
 
 Exit codes, so CI can tell a bad dataset from a broken job:
 - 0: no finding reaches --fail-on (default: error), and with --strict no check was skipped
@@ -26,9 +26,11 @@ from typing import Callable, Sequence
 
 import yaml
 
+from .bees.meta.cli import SUBCOMMANDS as META_SUBCOMMANDS
+from .bees.meta.metafile import is_zarr
 from .bees.stats.cli import SUBCOMMANDS as STATS_SUBCOMMANDS
 from .honeycomb import BEES, CheckContext, Dataset, Severity, checks_for, load_spec, run
-from .honeycomb.report import to_json, to_text
+from .honeycomb.report import to_json, to_markdown, to_text
 
 BEE_DESCRIPTIONS = {
     "meta": "metadata and structure",
@@ -45,9 +47,11 @@ Subcommand = tuple[str, str, Callable[[ArgumentParser], None], Callable[[Namespa
 def _add_check_args(p: ArgumentParser, with_bees: bool) -> None:
     p.add_argument("dataset", nargs="?", help="path to the anemoi zarr dataset")
     p.add_argument("--spec", help="dataset spec YAML (see templates/spec.example.yaml)")
-    p.add_argument("--reference", help="reference dataset, for checks that compare against one")
+    p.add_argument("--reference",
+                   help="reference to compare with: a zarr dataset or a meta file (`meta-bee dump`); "
+                   "overrides the spec's `reference_meta`")
     p.add_argument("--select", nargs="+", metavar="CHECK", help="run only these checks")
-    p.add_argument("--format", choices=("text", "json"), default="text")
+    p.add_argument("--format", choices=("text", "json", "markdown"), default="text")
     p.add_argument("--fail-on", choices=("error", "warning"), default="error")
     p.add_argument("--quiet", action="store_true", help="text output: hide info findings")
     p.add_argument("--strict",
@@ -71,16 +75,22 @@ def _run_checks(args: Namespace, bees: list[str], prog: str) -> int:
         print(f"{prog}: error: the dataset argument is required", file=sys.stderr)
         return EXIT_USAGE
 
+    reference = Path(args.reference) if args.reference else None
+    if reference is not None and not reference.exists():
+        raise FileNotFoundError(f"reference not found: {reference}")
     ctx = CheckContext(
         dataset=Dataset(args.dataset),
         spec=load_spec(args.spec),
-        reference=Dataset(args.reference) if args.reference else None,
+        reference=Dataset(reference) if reference is not None and is_zarr(reference) else None,
+        reference_path=reference,
     )
     report = run(ctx, bees=bees, select=args.select)
     if args.report:
         Path(args.report).write_text(to_json(report) + "\n", encoding="utf-8")
     if args.format == "json":
         print(to_json(report))
+    elif args.format == "markdown":
+        print(to_markdown(report))
     else:
         print(to_text(report, min_severity=Severity.WARNING if args.quiet else Severity.INFO))
     return report.exit_code(Severity[args.fail_on.upper()], strict=args.strict)
@@ -131,7 +141,10 @@ def _bee_main(bee: str, description: str, argv: list[str] | None, extra: Sequenc
 
 
 def meta_bee_main(argv: list[str] | None = None) -> int:
-    return _bee_main("meta", "Check metadata and structure of an anemoi dataset.", argv)
+    return _bee_main("meta", "Check metadata and structure of an anemoi dataset, and write and compare meta "
+                     "files. See docs/meta-bee.md.",
+                     argv,
+                     extra=META_SUBCOMMANDS)
 
 
 def stats_bee_main(argv: list[str] | None = None) -> int:

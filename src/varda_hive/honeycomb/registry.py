@@ -12,6 +12,7 @@ check never hides the results of the others.
 """
 from dataclasses import dataclass, field, replace
 import importlib
+from pathlib import Path
 import traceback
 from typing import Callable, Iterable
 
@@ -26,7 +27,8 @@ BEES = ("meta", "stats", "spot")
 class CheckContext:
     dataset: Dataset
     spec: Spec
-    reference: Dataset | None = None
+    reference: Dataset | None = None  # the reference, when it is a zarr
+    reference_path: Path | None = None  # the reference as given: a zarr or a meta file (meta-bee)
     cache: dict = field(default_factory=dict)  # shared between checks of one run, e.g. a loaded source
 
 

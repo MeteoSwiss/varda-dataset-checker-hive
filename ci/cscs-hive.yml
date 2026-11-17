@@ -1,0 +1,52 @@
+# Reusable GitLab CI job for CSCS (Balfrin): gate the publication of an anemoi dataset on the hive.
+#
+# In the dataset repo's .cscs/*.yaml:
+#
+#   include:
+#     - remote: 'https://gitlab.com/cscs-ci/recipes/-/raw/master/templates/v2/.ci-ext.yml'
+#     - remote: 'https://raw.githubusercontent.com/MeteoSwiss/varda-dataset-checker-hive/main/ci/cscs-hive.yml'
+#
+#   check-dataset:
+#     extends: [.hive-check]
+#     stage: test
+#     variables:
+#       DATASET: /scratch/mch/.../my-dataset.zarr     # the freshly built dataset
+#       SPEC: checks/my-dataset.yaml                    # spec in the dataset repo (with reference_meta,
+#                                                       # reference_stats, ranges_file, variables_file)
+#
+# The job fails (exit 1) when a finding reaches HIVE_FAIL_ON or, with --strict, when a check was
+# skipped; exit 2 is a configuration error (missing dataset, invalid spec). hive.md (Markdown summary)
+# and hive.json (full report) are kept as artifacts.
+
+.hive-check:
+  extends: [.baremetal-runner-santis-gh200]
+  variables:
+    HIVE_REF: main               # git ref of varda-dataset-checker-hive
+    HIVE_FAIL_ON: error          # or: warning
+    HIVE_ARGS: ''                # extra arguments, e.g. '--bees meta stats'
+    HIVE_UV_VERSION: '0.11.32'
+    F7T_URL: 'https://api.cscs.ch/mch/firecrest/v2'
+    FIRECREST_SYSTEM: 'balfrin'
+    ARCH: 'x86_64'
+    SLURM_JOB_NUM_NODES: 1
+    SLURM_NTASKS: 1
+    SLURM_TIMELIMIT: '00:30:00'
+  script:
+    - |
+      set -euo pipefail
+      : "${DATASET:?set DATASET to the zarr dataset to check}"
+      : "${SPEC:?set SPEC to the dataset spec}"
+      export UV_CACHE_DIR="$SCRATCH/.cache/uv"
+      export HOME="$PWD/home" UV_INSTALL_DIR="$PWD/.local/bin" PATH="$PWD/.local/bin:$PATH"
+      curl -LsSf "https://astral.sh/uv/${HIVE_UV_VERSION}/install.sh" | env INSTALLER_NO_MODIFY_PATH=1 sh
+      hive() { uvx --from "git+https://github.com/MeteoSwiss/varda-dataset-checker-hive@${HIVE_REF}" hive "$@"; }
+      status=0
+      # shellcheck disable=SC2086
+      hive "$DATASET" --spec "$SPEC" --strict --fail-on "$HIVE_FAIL_ON" --report hive.json \
+        --format markdown $HIVE_ARGS > hive.md || status=$?
+      cat hive.md
+      exit "$status"
+  artifacts:
+    when: always
+    paths: [hive.md, hive.json]
+    expire_in: 30 days

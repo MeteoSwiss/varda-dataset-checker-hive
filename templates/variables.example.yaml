@@ -1,0 +1,13 @@
+# Expected per-variable metadata for meta-bee's `variables_metadata_match_spec`.
+# Name it in the spec as `variables_file: variables.yaml` (path relative to the spec).
+#
+# Each key is looked up in the dataset's `variables_metadata.<variable>`, first at the top level,
+# then in its `mars` section. Values must be scalars. Write it from the anemoi recipe, not from the
+# dataset you are about to check. Variables not listed here are not checked.
+# Units are not given here: they come from the `units` of the ranges file.
+T_2M:        {param: T_2M, levtype: sfc}
+T_850:       {param: T, levtype: pl, levelist: 850}
+U_10M:       {param: U_10M, levtype: sfc}
+V_10M:       {param: V_10M, levtype: sfc}
+FIS:         {param: FIS, levtype: sfc, constant_in_time: true}
+cos_latitude: {computed_forcing: true, constant_in_time: true}

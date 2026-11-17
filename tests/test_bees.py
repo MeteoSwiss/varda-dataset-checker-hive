@@ -33,9 +33,15 @@ def test_meta_variables(dataset_path, tmp_path):
     assert [(f.variable, f.message) for f in _errors(extra, "meta", spec)] == [("T_2M_COPY", "variable not in spec")]
 
 
-def test_meta_skips_without_spec(dataset_path):
+def test_meta_clean_without_spec(dataset_path):
+    """Without a spec, the consistency checks run and pass; the spec and reference checks skip."""
     report = run(CheckContext(Dataset(dataset_path), Spec()), bees=["meta"])
-    assert [f.severity for f in report.findings] == [Severity.INFO]
+    assert all(f.severity == Severity.INFO for f in report.findings)
+    assert {f.check
+            for f in report.findings if f.skipped} == {
+                "variables_match_spec", "dates_match_spec", "grid_matches_spec", "flags_match_spec",
+                "variables_metadata_match_spec", "matches_reference"
+            }
 
 
 def test_stats_finite_values(dataset_path):

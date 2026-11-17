@@ -1,4 +1,4 @@
-# Plausible physical ranges per variable, used by stats-bee (planned check).
+# Plausible physical ranges per variable, used by stats-bee (physical_ranges) and meta-bee (units).
 # Values outside [min, max] are reported. Keep the bounds loose: they catch
 # unit errors and garbage, not unusual weather.
 T_2M:        {min: 200.0, max: 330.0, units: K}
