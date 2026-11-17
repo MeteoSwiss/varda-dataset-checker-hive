@@ -258,3 +258,10 @@ def test_templates_load(tmp_path):
         (tmp_path / dst).write_text((templates / src).read_text())
     spec = load_spec(tmp_path / "spec.yaml")
     assert spec.bbox is not None and spec.variables_file is not None and spec.reference_policy.ignore
+
+
+def test_constant_fields_both_directions(dataset_path):
+    """FIS is flagged constant_in_time but no longer listed; T_2M is listed but not flagged."""
+    _constant_fields(dataset_path)
+    findings = [f for f in _findings(dataset_path, Spec()) if f.check == "variables_metadata_consistent"]
+    assert {(f.variable, f.severity) for f in findings} == {("FIS", Severity.ERROR), ("T_2M", Severity.ERROR)}

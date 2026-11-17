@@ -204,15 +204,17 @@ def variables_metadata_consistent(ctx: CheckContext) -> Iterator[Finding]:
     constant = set(ds.attrs.get("constant_fields") or [])
     for name in sorted(constant - names):
         yield error("`constant_fields` lists a variable not in the dataset", variable=name)
-    # anemoi flags constant fields in both places; they must agree.
+    # anemoi flags constant fields in both places; they must agree. Once any variable carries the
+    # flag, a variable without it counts as not constant (anemoi sets it only where it applies).
     flags = {
         v: m["constant_in_time"]
         for v, m in (metadata or {}).items() if isinstance(m, dict) and "constant_in_time" in m
     }
     if flags and "constant_fields" in ds.attrs:
-        flagged, in_time = set(flags), {v for v, flag in flags.items() if flag}
-        for name in sorted((constant & flagged) - in_time):
-            yield error("in `constant_fields`, but `variables_metadata` says not constant_in_time", variable=name)
+        in_time = {v for v, flag in flags.items() if flag}
+        for name in sorted((constant & names) - in_time):
+            said = "says not" if name in flags else "does not flag it as"
+            yield error(f"in `constant_fields`, but `variables_metadata` {said} constant_in_time", variable=name)
         for name in sorted(in_time - constant):
             yield error("constant_in_time in `variables_metadata`, but not in `constant_fields`", variable=name)
 

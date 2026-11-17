@@ -66,7 +66,25 @@ def test_differences(tmp_path):
     assert by_path["variables"].severity == Severity.ERROR and "added ['X']" in by_path["variables"].message
     assert by_path["variables_metadata.T_850.mars.levelist"].variable == "T_850"
     assert by_path["variables_metadata.T_850.mars.levelist"].severity == Severity.WARNING
-    assert by_path["arrays.mean.shape"].severity == Severity.ERROR
+    # shapes that only follow from the extra variable are INFO, the cause itself is the ERROR
+    for path in ("shape", "arrays.data.shape", "arrays.mean.shape"):
+        assert by_path[path].severity == Severity.INFO
+        assert "follows from the number of variables" in by_path[path].message
+    errors = {f.details["path"] for f in comparison.findings if f.severity == Severity.ERROR}
+    assert errors == {"variables", "resolution"}
+
+
+def test_shape_follows_dates(tmp_path):
+    reference = fingerprint(Dataset(build_dataset(tmp_path / "a.zarr")))
+    longer = fingerprint(Dataset(build_dataset(tmp_path / "b.zarr", nt=10)))
+    by_path = {i.path: i for i in compare_meta(longer, reference).items}
+    assert by_path["arrays.dates.shape"].severity == Severity.ERROR  # the cause
+    assert by_path["arrays.data.shape"].severity == Severity.INFO
+    assert by_path["arrays.data.shape"].note.endswith("follows from the number of dates")
+    # a shape change not explained by the counts stays an ERROR
+    longer["arrays"]["latitudes"]["shape"] = [51]
+    assert {i.path: i for i in compare_meta(longer, reference).items}["arrays.latitudes.shape"].severity == \
+        Severity.ERROR
 
 
 def test_values_changed_same_summary(tmp_path):

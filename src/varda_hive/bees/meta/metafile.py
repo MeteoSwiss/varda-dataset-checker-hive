@@ -224,14 +224,49 @@ def compare_meta(actual: dict, reference: dict, policy: ReferencePolicy | None =
     raw: list[tuple[str, str, Any, Any]] = []
     raw.extend(_walk(actual.get("attrs", {}), reference.get("attrs", {}), ()))
     raw.extend(_compare_arrays(actual.get("arrays", {}), reference.get("arrays", {})))
+    counts = (_counts(reference), _counts(actual))
     for path, status, ref, act in raw:
         severity = None if status == IDENTICAL else severity_of(path, policy)
         if severity == IGNORE:
             comparison.items.append(Item(path, IGNORED, ref, act))
             continue
         assert severity is None or isinstance(severity, Severity)
-        comparison.items.append(Item(path, status, ref, act, severity, _note(path, ref, act, status)))
+        note = _note(path, ref, act, status)
+        if severity is not None and (follows := _follows(path, ref, act, status, counts)):
+            severity, note = min(severity, Severity.INFO), f"{_short(ref)} -> {_short(act)}, follows from {follows}"
+        comparison.items.append(Item(path, status, ref, act, severity, note))
     return comparison
+
+
+Counts = tuple[int | None, int | None]
+
+
+def _counts(meta: dict) -> Counts:
+    """Number of variables and of dates, the two sizes a shape change usually comes from."""
+    variables = meta.get("attrs", {}).get("variables")
+    dates = meta.get("arrays", {}).get("dates", {}).get("shape")
+    return (len(variables) if isinstance(variables, list) else None, dates[0] if dates else None)
+
+
+def _follows(path: str, reference: Any, actual: Any, status: str, counts: tuple[Counts, Counts]) -> str:
+    """For a shape that differs only by a change of the number of variables or dates, which are
+    reported themselves (`variables`, `arrays.dates.shape`): what it follows from, else ""."""
+    if status != DIFFERS or path in ("variables", "arrays.dates.shape"):
+        return ""
+    if not (path == "shape" or (path.startswith("arrays.") and path.endswith(".shape"))):
+        return ""
+    if not isinstance(reference, list) or not isinstance(actual, list) or len(reference) != len(actual):
+        return ""
+    (ref_vars, ref_dates), (act_vars, act_dates) = counts
+    causes = {(ref_vars, act_vars): "the number of variables", (ref_dates, act_dates): "the number of dates"}
+    found = set()
+    for pair in zip(reference, actual):
+        if pair[0] == pair[1]:
+            continue
+        if pair not in causes:
+            return ""
+        found.add(causes[pair])
+    return " and ".join(sorted(found))
 
 
 def _walk(actual: Any, reference: Any, path: tuple[str, ...]) -> Iterator[tuple[str, str, Any, Any]]:
@@ -316,7 +351,7 @@ def _finding(item: Item) -> Finding:
     elif item.status == MISSING:
         message = f"{item.path}: missing, the reference has {_short(item.reference)}"
     else:
-        change = item.note or f"{_short(item.reference)} -> {_short(item.actual)}"
+        change = item.note or f"{_short(item.reference, 100)} -> {_short(item.actual, 100)}"
         message = f"{item.path} differs from the reference: {change}"
     make = {Severity.ERROR: error, Severity.WARNING: warning, Severity.INFO: info}[item.severity]
     return make(message,
