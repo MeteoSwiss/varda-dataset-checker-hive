@@ -812,6 +812,28 @@ wheels = [
 ]
 
 [[package]]
+name = "eccodeslib"
+version = "2.50.0.32"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "eckitlib" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/58/66/0b4e817c28e49fa4c6aafea0670e4cb8379e9b0eb75c17dc3262b46501a2/eccodeslib-2.50.0.32-cp312-cp312-macosx_15_0_arm64.whl", hash = "sha256:9ab026a44085be54cdf2e73bfc085e482902a163f595a21e2d9ec4ddb67e2ddf", size = 9058343, upload-time = "2026-10-14T15:17:53.47Z" },
+    { url = "https://files.pythonhosted.org/packages/cd/5f/7557018437defc79e06cdcbfd3d9f039b7510af159fcfeb3e591bcd86452/eccodeslib-2.50.0.32-cp312-cp312-macosx_15_0_x86_64.whl", hash = "sha256:87681a2931789b3de50af5b889aa781d9ac2a4d9cae22aa5df94d3654236658d", size = 8837360, upload-time = "2026-10-14T15:39:41.534Z" },
+    { url = "https://files.pythonhosted.org/packages/30/4b/329231c761c768f43cf361773da1ad54ce58cda9add380b317cf7cb3df61/eccodeslib-2.50.0.32-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:0bf443ac381261ea5b7794da635c6ae4c1b3affe026e144f80b95de63c281bf6", size = 9201884, upload-time = "2026-10-14T15:24:10.292Z" },
+    { url = "https://files.pythonhosted.org/packages/78/e2/2a8e70739bcf8171c3ebf04278cad4f1d835f850a437547729dcbc34fa71/eccodeslib-2.50.0.32-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:62dc2f86988eacf08ff495a6560fa9891bb549b6b95ed51e0568fae65e481c67", size = 9018943, upload-time = "2026-10-14T15:28:24.715Z" },
+    { url = "https://files.pythonhosted.org/packages/9e/2a/5dd55d90139970c48242dabce2577c032d9b6d55a93a96335ea390a0c1a5/eccodeslib-2.50.0.32-cp313-cp313-macosx_15_0_arm64.whl", hash = "sha256:b509e7563f2af7c014112a924962083197f8cb347869276c0a72bf598b19b255", size = 9058337, upload-time = "2026-10-14T15:17:41.96Z" },
+    { url = "https://files.pythonhosted.org/packages/2d/eb/5c3037328994c2bf8972ec54c71331040108d7fd15cf49a271c761c61f91/eccodeslib-2.50.0.32-cp313-cp313-macosx_15_0_x86_64.whl", hash = "sha256:f53cc07dc17c1596d8c28907f7c431eccea5e2d8bffa8856c44831934e2036e2", size = 8837366, upload-time = "2026-10-14T15:23:52.659Z" },
+    { url = "https://files.pythonhosted.org/packages/ba/4a/be0350ad7b4387bf606c1ed41bf9fe5589454e59a9cd3975345ac7b492a3/eccodeslib-2.50.0.32-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:3fb5a386390665de028ce22f2489cbf07e803bf790e0937c9f42db29daacfd4d", size = 9201882, upload-time = "2026-10-14T15:24:24.083Z" },
+    { url = "https://files.pythonhosted.org/packages/a5/78/6bb97c79f7345eddda5d5c11ad2c6c528d76d761fccdfab570b052099f1f/eccodeslib-2.50.0.32-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:bfd010526ec06e04557d9ad1de515ce6b0344e7cfd8d26231cf1314e0fffd2c3", size = 9018946, upload-time = "2026-10-14T15:28:25.062Z" },
+    { url = "https://files.pythonhosted.org/packages/8b/77/91fd02f184e078409171fa309145980259f9f3771a252241d0c787de7198/eccodeslib-2.50.0.32-cp314-cp314-macosx_15_0_arm64.whl", hash = "sha256:9951b23c24a06561188fb11d28190b974b85846dc1d74dca7f2027d21b24162f", size = 9058347, upload-time = "2026-10-14T15:27:23.529Z" },
+    { url = "https://files.pythonhosted.org/packages/f2/e9/2594052123c11967e9d2328bb39198468575753fd574e2ebbdb0f010ab12/eccodeslib-2.50.0.32-cp314-cp314-macosx_15_0_x86_64.whl", hash = "sha256:7df075d12b343b5aeda5f3279636c0971e2bca79ff304c87403550dd0ad46bd1", size = 8837423, upload-time = "2026-10-14T15:58:44.323Z" },
+    { url = "https://files.pythonhosted.org/packages/9c/a9/e9679e07f6aa3caf9c10527e8386fc67e514ea86297ee427c213e59f96d3/eccodeslib-2.50.0.32-cp314-cp314-manylinux_2_28_aarch64.whl", hash = "sha256:71e163846c1cde9faa89a64533a7d08587f4ca12e03a4318325b96ca6fca5d20", size = 9201884, upload-time = "2026-10-14T15:24:55.428Z" },
+    { url = "https://files.pythonhosted.org/packages/92/80/42e5df71f62abc6803461f585ed35f1f048a4d7bd17d43b7dacd96232108/eccodeslib-2.50.0.32-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:1f6dda3258b21b281011775998acc848dfa8d4f6520598776ff4543c48bb690e", size = 9018944, upload-time = "2026-10-14T15:29:06.789Z" },
+]
+
+[[package]]
 name = "eckitlib"
 version = "2.5.0.32"
 source = { registry = "https://pypi.org/simple" }
@@ -2517,9 +2539,15 @@ dependencies = [
 anemoi = [
     { name = "anemoi-datasets" },
 ]
+grib = [
+    { name = "eccodes" },
+    { name = "eccodeslib", marker = "sys_platform != 'win32'" },
+]
 
 [package.dev-dependencies]
 dev = [
+    { name = "eccodes" },
+    { name = "eccodeslib", marker = "sys_platform != 'win32'" },
     { name = "mypy" },
     { name = "pylint" },
     { name = "pytest" },
@@ -2532,6 +2560,8 @@ lint = [
     { name = "yapf" },
 ]
 test = [
+    { name = "eccodes" },
+    { name = "eccodeslib", marker = "sys_platform != 'win32'" },
     { name = "pytest" },
     { name = "pytest-cov" },
 ]
@@ -2539,15 +2569,19 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "anemoi-datasets", marker = "extra == 'anemoi'", specifier = ">=0.5.42" },
+    { name = "eccodes", marker = "extra == 'grib'", specifier = ">=2.50.0" },
+    { name = "eccodeslib", marker = "sys_platform != 'win32' and extra == 'grib'", specifier = ">=2.50.0.32" },
     { name = "numpy" },
     { name = "pydantic", specifier = ">=2" },
     { name = "pyyaml" },
     { name = "zarr", specifier = ">=2.18,<3" },
 ]
-provides-extras = ["anemoi"]
+provides-extras = ["anemoi", "grib"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "eccodes", specifier = ">=2.50.0" },
+    { name = "eccodeslib", marker = "sys_platform != 'win32'", specifier = ">=2.50.0.32" },
     { name = "mypy", specifier = ">=1.18" },
     { name = "pylint", specifier = ">=3.3" },
     { name = "pytest", specifier = ">=8" },
@@ -2560,6 +2594,8 @@ lint = [
     { name = "yapf", specifier = ">=0.43" },
 ]
 test = [
+    { name = "eccodes", specifier = ">=2.50.0" },
+    { name = "eccodeslib", marker = "sys_platform != 'win32'", specifier = ">=2.50.0.32" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-cov", specifier = ">=7" },
 ]

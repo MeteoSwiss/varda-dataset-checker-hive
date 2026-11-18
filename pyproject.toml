@@ -15,6 +15,10 @@ dependencies = [
 
 [project.optional-dependencies]
 anemoi = ["anemoi-datasets>=0.5.42"]
+grib = [
+    "eccodes>=2.50.0",
+    "eccodeslib>=2.50.0.32 ; sys_platform != 'win32'",
+]
 
 [project.scripts]
 hive = "varda_hive.cli:hive_main"
@@ -24,6 +28,8 @@ spot-bee = "varda_hive.cli:spot_bee_main"
 
 [dependency-groups]
 test = [
+    "eccodes>=2.50.0",
+    "eccodeslib>=2.50.0.32 ; sys_platform != 'win32'",
     "pytest>=8",
     "pytest-cov>=7",
 ]

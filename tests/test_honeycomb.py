@@ -141,6 +141,13 @@ def test_load_source_from_file(write_spec, tmp_path, dataset_path):
     assert load_source(Spec()) is None
 
 
+def test_load_source_passes_base_dir(write_spec, tmp_path):
+    (tmp_path / "dir_source.py").write_text("class S:\n"
+                                            "    def __init__(self, base_dir):\n        self.base_dir = base_dir\n"
+                                            "    def fetch(self, variable, date):\n        return None\n")
+    assert load_source(load_spec(write_spec("source: {plugin: dir_source.py:S}\n"))).base_dir == tmp_path
+
+
 def test_load_source_rejects_non_source(write_spec, tmp_path):
     (tmp_path / "bad.py").write_text("class S:\n    pass\n")
     with pytest.raises(TypeError):

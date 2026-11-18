@@ -15,7 +15,8 @@ covers, and update the docs when behaviour changes.
 | stats-bee sampling, stats files, tolerances, calibration, limits | [docs/stats-bee.md](docs/stats-bee.md) |
 | CI gating, `--strict`, publishing workflow, CSCS-CI job | [docs/ci.md](docs/ci.md) |
 | adding a check | [README.md#adding-a-check](README.md#adding-a-check) |
-| source plug-ins (spot-bee) | `templates/source_plugin_example.py` |
+| spot-bee checks, source contract, grib-index source, derived variables | [docs/spot-bee.md](docs/spot-bee.md) |
+| source plug-ins (spot-bee) | `src/varda_hive/sources/` (reusable), `templates/source_plugin_example.py` |
 | dev setup, style, commit messages, PR process | [CONTRIBUTING.md](CONTRIBUTING.md), [.github/pull_request_template.md](.github/pull_request_template.md) |
 
 ## Commands
@@ -35,7 +36,8 @@ uv run yapf --diff --recursive src tests      # fix with: uv run yapf -r -i src 
 Single test: `uv run pytest tests/test_bees.py::<test_name>`. The `faulty` marker is deselected by
 default (`addopts` in `pyproject.toml`); `uv run pytest -m faulty` runs on Varda-tiny on /scratch
 and skips when the data is missing (paths overridable via `HIVE_FAULTY_DIR` / `HIVE_CLEAN_DS`, see
-`tests/test_faulty_tiny.py`).
+`tests/test_faulty_tiny.py`; spot-bee's GRIB tests also use `HIVE_ICH1_ROOT`, see
+`tests/test_spot_ich1.py`). eccodes (`grib` extra) is in the `test` group, so `uv sync` installs it.
 
 ## Architecture in brief
 
@@ -59,4 +61,7 @@ and skips when the data is missing (paths overridable via `HIVE_FAULTY_DIR` / `H
 - When adding a check or spec field, update the checks table / spec fields in the matching doc
   (`README.md`, `docs/<bee>.md`) and `templates/spec.example.yaml`.
 - New files carry the BSD-3-Clause license header used in existing sources.
-- spot-bee is still a template (only `matches_source`); see the README status note.
+- Reusable source plug-ins live in `src/varda_hive/sources/`; the honeycomb and the bees never
+  import them, so their optional dependencies (eccodes: `grib` extra) stay optional.
+- spot-bee does not reimplement derived variables or computed forcings; they are reported as not
+  comparable (see docs/spot-bee.md).

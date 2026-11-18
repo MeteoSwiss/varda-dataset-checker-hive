@@ -130,13 +130,98 @@ def _zarr_source_spec(reference: Path, **sampling) -> Spec:
                 base_dir=TEMPLATES)
 
 
+def _spot_summary(path, spec):
+    report = run(CheckContext(Dataset(path), spec), bees=["spot"])
+    [summary] = [f for f in report.findings if f.message.startswith("spot summary")]
+    return summary
+
+
 def test_spot_matches_source(dataset_path, tmp_path):
     reference = build_dataset(tmp_path / "reference.zarr")  # identical copy
     spec = _zarr_source_spec(reference, n_dates=2, include_dates=[5])
     assert _errors(dataset_path, "spot", spec) == []
+    assert _spot_summary(dataset_path, spec).details["identical"] == VARIABLES
     zarr.open_group(str(dataset_path), mode="r+")["data"][5, 3] += 1.0
     [f] = _errors(dataset_path, "spot", spec)
     assert (f.variable, f.time) == ("U_10M", "2020-03-01T05:00:00")
+    assert list(_spot_summary(dataset_path, spec).details["differ"]) == ["U_10M"]
+
+
+def test_spot_per_variable_tolerance(dataset_path, tmp_path):
+    reference = build_dataset(tmp_path / "reference.zarr")
+    zarr.open_group(str(dataset_path), mode="r+")["data"][:, 1] += 0.1  # T_2M off by 0.1, more than rtol * 280 K
+    spec = _zarr_source_spec(reference, n_dates="all")
+    assert {f.variable for f in _errors(dataset_path, "spot", spec)} == {"T_2M"}
+    spec = spec.model_copy(
+        update={"tolerances": Spec(tolerances={
+            "source_per_variable": {
+                "T_2M": {
+                    "atol": 0.2
+                }
+            }
+        }).tolerances})
+    assert _errors(dataset_path, "spot", spec) == []
+    assert list(_spot_summary(dataset_path, spec).details["within_tolerance"]) == ["T_2M"]
+
+
+def test_spot_samples_same_dates_as_stats(dataset_path, tmp_path):
+    from varda_hive.bees.stats.statsfile import sample_indices  # pylint: disable=import-outside-toplevel
+    from varda_hive.honeycomb.sampling import sample_time_indices  # pylint: disable=import-outside-toplevel
+    spec = Spec(sampling={"n_dates": 3, "include_dates": [6], "seed": 3})
+    ds = Dataset(dataset_path)
+    picked, _ = sample_indices(ds, spec)
+    assert sample_time_indices(len(ds.dates), spec.sampling, exclude=ds.missing_indices) == sorted(picked)
+
+
+def test_spot_not_comparable_and_ensemble(dataset_path, tmp_path):
+    """A plug-in raising NotComparable gives one INFO; every ensemble member is compared."""
+    group = zarr.open_group(str(dataset_path), mode="r+")
+    two = np.concatenate([group["data"][:]] * 2, axis=2)
+    group.create_dataset("data", data=two, chunks=(1, len(VARIABLES), 2, NG), overwrite=True)
+    (tmp_path / "ens_source.py").write_text(
+        "import numpy as np\n"
+        "from varda_hive.honeycomb import Dataset, NotComparable\n"
+        "class S:\n"
+        "    def __init__(self, path):\n        self.ds = Dataset(path)\n"
+        "    def fetch(self, variable, date):\n"
+        "        if variable == 'FIS':\n            raise NotComparable('from another file')\n"
+        "        t = list(self.ds.dates).index(date)\n"
+        "        return self.ds.data[t, self.ds.index(variable)]\n")
+    reference = tmp_path / "reference.zarr"
+    zarr.copy_store(zarr.DirectoryStore(str(dataset_path)), zarr.DirectoryStore(str(reference)))
+    spec = Spec(source={
+        "plugin": "ens_source.py:S",
+        "args": {
+            "path": str(reference)
+        }
+    },
+                sampling={"n_dates": "all"},
+                base_dir=tmp_path)
+    assert _errors(dataset_path, "spot", spec) == []
+    summary = _spot_summary(dataset_path, spec)
+    assert summary.details["not_comparable"] == {"FIS": "from another file"}
+    assert summary.details["n_members"] == 2 and "× 2 members" in summary.message
+    group["data"][3, 2, 1, 4] += 1.0  # member 1 only
+    [f] = _errors(dataset_path, "spot", spec)
+    assert (f.variable, f.details["members"], f.details["first_points"]) == ("T_850", [1], [4])
+
+
+def test_spot_source_shape_and_failure(dataset_path, tmp_path):
+    (tmp_path / "bad_source.py").write_text("import numpy as np\n"
+                                            "class S:\n"
+                                            "    def fetch(self, variable, date):\n"
+                                            "        if variable == 'T_2M':\n            raise OSError('disk gone')\n"
+                                            "        if variable == 'U_10M':\n            return None\n"
+                                            "        return np.zeros(7)\n")
+    spec = Spec(source={"plugin": "bad_source.py:S"}, sampling={"n_dates": 3}, base_dir=tmp_path)
+    report = run(CheckContext(Dataset(dataset_path), spec), bees=["spot"])
+    errors = [f for f in report.findings if f.severity == Severity.ERROR]
+    assert sorted(f.variable for f in errors) == ["FIS", "T_2M", "T_850", "V_10M"]  # once per variable
+    assert any("disk gone" in f.message for f in errors)
+    [warn] = [f for f in report.findings if f.severity == Severity.WARNING]
+    assert warn.variable == "U_10M" and len(warn.details["dates"]) == 3
+    summary = _spot_summary(dataset_path, spec)
+    assert len(summary.details["failed"]) == 4 and summary.details["unavailable"] == {"U_10M": warn.details["dates"]}
 
 
 def test_cli(dataset_path, write_spec, capsys):

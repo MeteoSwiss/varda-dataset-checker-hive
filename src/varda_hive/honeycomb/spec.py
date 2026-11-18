@@ -46,8 +46,26 @@ class Tolerances(_Strict):
     # Stats file vs reference stats file: |diff| <= compare_atol_stdev * stdev of the variable is
     # reported as "close" instead of "differs". 0 means only bitwise identical values pass.
     compare_atol_stdev: float = 0.0
+    # spot-bee: dataset vs source values agree if |diff| <= source_atol + source_rtol * |source|.
     source_rtol: float = 1e-4
     source_atol: float = 1e-4
+    # Per-variable overrides of source_rtol/source_atol, e.g. {TOT_PREC_1H: {atol: 1.0e-6}}.
+    source_per_variable: dict[str, "SourceTolerance"] = Field(default_factory=dict)
+
+    def source_tolerance(self, variable: str) -> tuple[float, float]:
+        """(rtol, atol) for comparing `variable` with the source."""
+        override = self.source_per_variable.get(variable)
+        rtol = override.rtol if override and override.rtol is not None else self.source_rtol
+        atol = override.atol if override and override.atol is not None else self.source_atol
+        return rtol, atol
+
+
+class SourceTolerance(_Strict):
+    rtol: float | None = None
+    atol: float | None = None
+
+
+Tolerances.model_rebuild()
 
 
 class SourceSpec(_Strict):

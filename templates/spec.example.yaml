@@ -51,8 +51,9 @@ tolerances:
   statistics_rtol: 1.0e-5   # recomputed vs stored statistics: floating-point part
   z_threshold: 5.0          #   ... plus z_threshold * sampling error (0 for n_dates: all)
   compare_atol_stdev: 0.0   # stats file vs reference: "close" within this * stdev, else "differs"
-  source_rtol: 1.0e-4       # dataset vs source values
+  source_rtol: 1.0e-4       # spot-bee: dataset vs source values, |diff| <= atol + rtol * |source|
   source_atol: 1.0e-4
+  source_per_variable: {}   # overrides, e.g. {TOT_PREC_1H: {atol: 1.0e-6}}
 
 # Accepted warnings, demoted to INFO: {check: [variables]}, "*" for all variables
 ignore_warnings:
@@ -60,8 +61,16 @@ ignore_warnings:
 
 # spot-bee: where the original values come from. "file.py:Class" (relative to
 # this file) or "package.module:Class"; `args` are passed to the constructor.
-# Uncomment with a real plug-in, see templates/source_plugin_example.py.
+# Uncomment and adapt, see docs/spot-bee.md (needs the `grib` extra).
 # source:
-#   plugin: source_plugin_example.py:ZarrSource
+#   plugin: varda_hive.sources.grib_index:GribIndexSource
 #   args:
-#     path: /path/to/reference.zarr
+#     root: /path/to/dataset-repo           # base of the index paths and of the GRIB paths in them
+#     indexes: {ana: grib-index-ana.db, fg: grib-index-fg.db}
+#     default_index: ana
+#     variables:                            # overrides of the mapping from variables_metadata.mars
+#       TOT_PREC_1H: {index: fg, match: {shortName: TOT_PREC}, scale: 0.001}
+#     skip: {TOT_PREC_6H: 6 h accumulation}
+# or another anemoi zarr, e.g. a trusted copy (templates/source_plugin_example.py):
+#   plugin: source_plugin_example.py:ZarrSource
+#   args: {path: /path/to/reference.zarr}

@@ -45,7 +45,9 @@ def random_time_indices(n_times: int,
 
 
 def sample_time_indices(n_times: int, sampling: Sampling, exclude: Collection[int] = ()) -> list[int]:
-    picked = set(random_time_indices(n_times, sampling, exclude=exclude))
+    """The sampled time indices: the stratified random draw plus `include_dates`. stats-bee draws the
+    same dates (bees/stats/statsfile.py:sample_indices), so spot-bee and stats-bee check the same cells."""
+    picked = set(random_time_indices(n_times, sampling, stratified=True, exclude=exclude))
     picked |= {t for t in sampling.include_dates if 0 <= t < n_times and t not in exclude}
     return sorted(picked)
 

@@ -8,7 +8,7 @@ A hive of slim tools ("bees") that check anemoi datasets for faults. Each bee co
 |---|---|---|
 | `meta-bee` | metadata and structure: internal consistency, variables, dates, frequency, grid, per-variable metadata, reference diff ([docs](docs/meta-bee.md)) | `.zattrs` and small arrays only |
 | `stats-bee` | values: NaNs, constant fields, physical ranges, stored vs recomputed statistics, reference stats file ([docs](docs/stats-bee.md)) | sampled time steps |
-| `spot-bee` | sampled (time, variable, grid points) vs the original source | sampled time steps + source |
+| `spot-bee` | sampled (time, variable, grid points) vs the original source, e.g. GRIB via a grib-index DB: what is identical, what differs ([docs](docs/spot-bee.md)) | sampled time steps + source |
 | `hive` | runs all bees and merges their findings | |
 
 All of them share the same core, the `honeycomb`:
@@ -19,13 +19,14 @@ All of them share the same core, the `honeycomb`:
 - seeded sampling
 - the `Source` interface
 
-> Status: stats-bee and meta-bee are implemented; spot-bee still has one template check
-> (`matches_source`).
+> Status: all three bees are implemented. spot-bee ships a generic grib-index source
+> (`GribIndexSource`, `grib` extra). Derived variables, computed forcings and constant fields are
+> reported as not comparable, see [docs/spot-bee.md](docs/spot-bee.md#derived-variables-and-forcings).
 
 ## Usage
 
 ```bash
-uv sync
+uv sync                                                # add --extra grib for spot-bee's GRIB source
 uv run hive <dataset.zarr> --spec <spec.yaml>          # all bees
 uv run meta-bee check <dataset.zarr> --spec <spec.yaml>   # one bee
 uv run hive --list                                     # available checks
@@ -34,6 +35,7 @@ uv run meta-bee compare <dataset.zarr> meta.yaml       # metadata: what is ident
 uv run stats-bee dump <dataset.zarr> --spec <spec.yaml> -o stats.yaml   # stats file
 uv run stats-bee compare stats.yaml reference.yaml     # what is identical, what differs
 uv run stats-bee calibrate <dataset.zarr> --spec <spec.yaml> -o tolerances.yaml   # calibrated tolerances
+uv run spot-bee check <dataset.zarr> --spec <spec.yaml>   # sampled values vs the source
 uv run hive <dataset.zarr> --spec <spec.yaml> --format json --fail-on warning   # or --format markdown
 ```
 
@@ -73,17 +75,18 @@ The hive is generic. Everything dataset-specific lives in the **dataset's own re
 - **The spec** (`checks/<dataset>.yaml`): expected variables, dates, frequency, grid, constant
   fields, physical ranges, sampling and tolerances. Every field is optional, and unknown keys are
   rejected. See `templates/spec.example.yaml`.
-- **The source plug-in**: a class with `fetch(variable, date) -> np.ndarray | None` that spot-bee
-  uses to get the original values, e.g. from GRIB via a grib-index DB for ICH1. The spec names it
-  by import path:
+- **The source configuration**: where spot-bee gets the original values. For datasets built from
+  GRIB with anemoi's `grib-index` source, the generic plug-in in the hive reads the same index DBs.
+  The dataset repo only adds the mapping of renamed or rescaled variables:
 
   ```yaml
   source:
-    plugin: ich1_source.py:GribIndexSource     # or package.module:Class
-    args: {ana_db: ..., fg_db: ...}
+    plugin: varda_hive.sources.grib_index:GribIndexSource   # or file.py:Class in the dataset repo
+    args: {root: ..., indexes: {ana: grib-index-ana.db, fg: grib-index-fg.db}, variables: {...}}
   ```
 
-  See `templates/source_plugin_example.py`, which reads another zarr.
+  Other sources need a plug-in, a class with `fetch(variable, date) -> np.ndarray | None`, see
+  [docs/spot-bee.md](docs/spot-bee.md#source-plug-ins) and `templates/source_plugin_example.py`.
 
 ## Setting up a dataset
 
@@ -160,8 +163,8 @@ paths resolve against the spec file's directory.
 | `reference_stats` | stats-bee | stats file of the accepted version, written by `stats-bee dump` |
 | `calibrated_tolerances` | stats-bee | tolerance file for `statistics_consistent`, written by `stats-bee calibrate` |
 | `sampling` | stats-bee, spot-bee | `seed`, `n_dates` and `n_points` (int or `all`), `include_dates`; the same dates x points for both bees |
-| `tolerances` | stats-bee, spot-bee | `statistics_rtol`, `z_threshold`, `compare_atol_stdev` (stats-bee); `source_rtol`, `source_atol` (spot-bee) |
-| `source` | spot-bee | source plug-in, see above |
+| `tolerances` | stats-bee, spot-bee | `statistics_rtol`, `z_threshold`, `compare_atol_stdev` (stats-bee); `source_rtol`, `source_atol`, `source_per_variable: {VAR: {rtol, atol}}` (spot-bee) |
+| `source` | spot-bee | source plug-in and its args, see [docs/spot-bee.md](docs/spot-bee.md#source-plug-ins) |
 | `ignore_warnings` | all bees | `{check: [variables]}` (or `"*"` for all variables): warnings demoted to INFO |
 
 `templates/spec.example.yaml` shows every field with its default value, and
@@ -186,7 +189,7 @@ clean synthetic dataset and fires on a broken one, as in `tests/test_bees.py`.
 
 ```bash
 uv sync && uv run pytest
-uv run pytest -m faulty    # stats-bee and meta-bee on Varda-tiny and its faulty variants (needs /scratch)
+uv run pytest -m faulty    # all bees on Varda-tiny and its faulty variants (needs /scratch)
 ```
 
 Quality tools:

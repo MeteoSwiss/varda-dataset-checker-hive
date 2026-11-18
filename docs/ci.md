@@ -22,7 +22,9 @@ code tells the job what happened:
   merge request or the job summary (`--format text`, the default, is meant for the log).
 - `--fail-on warning` also fails on warnings. Known, accepted warnings can be demoted to INFO in the
   spec, so it stays usable: `ignore_warnings: {statistics_consistent: [insolation]}`.
-- `--bees meta stats` runs only some bees, e.g. while spot-bee has no source configured.
+- `--bees meta stats` runs only some bees, e.g. on a runner that cannot read the source data. spot-bee
+  needs the source (e.g. the GRIB archive and its grib-index DBs) and the `grib` extra; without a
+  `source` in the spec it is skipped, which fails under `--strict`.
 
 ## Publishing a dataset
 

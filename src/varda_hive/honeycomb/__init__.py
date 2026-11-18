@@ -7,7 +7,7 @@
 from .dataset import Dataset
 from .findings import Finding, Report, Severity, error, info, skipped, warning
 from .registry import BEES, CheckContext, check, checks_for, run
-from .sources import Source, load_source
+from .sources import NotComparable, Source, load_source
 from .spec import BBox, PhysicalRange, ReferencePolicy, Spec, load_ranges, load_spec, load_variables_file
 
 __all__ = [
@@ -16,6 +16,7 @@ __all__ = [
     "CheckContext",
     "Dataset",
     "Finding",
+    "NotComparable",
     "PhysicalRange",
     "ReferencePolicy",
     "Report",

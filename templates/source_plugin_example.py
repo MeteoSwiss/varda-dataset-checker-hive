@@ -7,10 +7,14 @@
 """Example spot-bee source plug-in: reads the "true" values from another
 anemoi zarr dataset (e.g. a trusted copy).
 
-A real plug-in lives in the dataset's repo and reads the dataset's original
-source instead, e.g. GRIB files via a grib-index DB for ICH1. The only
-contract is a `fetch(variable, date)` method returning the flattened field
-in dataset grid order, or None if the source has no data for it.
+For GRIB sources indexed with `anemoi-datasets grib-index` (e.g. ICH1) use
+varda_hive.sources.grib_index:GribIndexSource instead; a dataset repo with
+another kind of source writes its own plug-in like this one. The only required
+member is `fetch(variable, date)`, returning the field in dataset grid order,
+shape (grid,) or (ensemble, grid), or None if the source has no data for it.
+`fetch` may raise varda_hive.honeycomb.NotComparable for a variable that
+cannot be compared (e.g. a derived field), and an optional `bind(dataset)` is
+called once before the first fetch. See docs/spot-bee.md.
 
 Reference it from the spec as:
 

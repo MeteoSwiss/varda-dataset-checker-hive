@@ -6,19 +6,30 @@
 """Where spot-bee gets the "true" values from.
 
 A source is any object with `fetch(variable, date) -> np.ndarray | None`
-returning the flattened field (grid points in dataset order), or None if the
-source has no data for it. Sources are dataset-specific and live in the
-dataset repo; the spec names them by import path, see
-templates/source_plugin_example.py.
+returning the field in dataset grid order, shape (grid,) or (ensemble, grid),
+or None if the source has no data for it. `fetch` raises `NotComparable` for a
+variable the source cannot reproduce one-to-one (a derived or accumulated
+field, a computed forcing). An optional `bind(dataset)` is called once before
+the first fetch, so a source can read the dataset's variables_metadata.
+
+The spec names the plug-in by import path, see templates/source_plugin_example.py
+and varda_hive.sources.grib_index. A plug-in whose __init__ takes `base_dir`
+gets the spec's directory, to resolve relative paths in its args.
 """
 import importlib
 import importlib.util
+import inspect
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 import numpy as np
 
 from .spec import Spec
+
+
+class NotComparable(Exception):
+    """Raised by `Source.fetch` for a variable that cannot be compared with the source; the message
+    is the reason, e.g. "accumulated over 6 h"."""
 
 
 @runtime_checkable
@@ -45,7 +56,11 @@ def load_source(spec: Spec) -> Source | None:
         module_spec.loader.exec_module(module)
     else:
         module = importlib.import_module(target)
-    source = getattr(module, class_name)(**spec.source.args)
+    cls = getattr(module, class_name)
+    kwargs = dict(spec.source.args)
+    if "base_dir" in inspect.signature(cls).parameters:
+        kwargs.setdefault("base_dir", spec.base_dir)
+    source = cls(**kwargs)
     if not isinstance(source, Source):
         raise TypeError(f"{spec.source.plugin} has no fetch(variable, date) method")
     return source
