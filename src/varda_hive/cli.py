@@ -7,7 +7,8 @@
 - `hive <dataset>` runs all bees
 - `meta-bee check`, `stats-bee check` and `spot-bee check` run one bee each, with the same options
 - extra subcommands of a bee, like `stats-bee dump` or `meta-bee compare`, live in the bee's own
-  `cli.py` (see varda_hive/bees/stats/cli.py and varda_hive/bees/meta/cli.py)
+  `cli.py` (see varda_hive/bees/stats/cli.py and varda_hive/bees/meta/cli.py), imported only when that
+  bee's command runs, so one bee never loads another
 
 Exit codes, so CI can tell a bad dataset from a broken job:
 - 0: no finding reaches --fail-on (default: error), and with --strict no check was skipped
@@ -19,6 +20,7 @@ A crash inside one check is not an internal error: it is reported as an ERROR fi
 """
 from argparse import ArgumentParser, Namespace, RawDescriptionHelpFormatter
 import functools
+import importlib
 from pathlib import Path
 import sys
 import traceback
@@ -26,8 +28,6 @@ from typing import Callable, Sequence
 
 import yaml
 
-from .bees.meta.cli import SUBCOMMANDS as META_SUBCOMMANDS
-from .bees.stats.cli import SUBCOMMANDS as STATS_SUBCOMMANDS
 from .honeycomb import BEES, CheckContext, Dataset, Severity, checks_for, load_spec, run
 from .honeycomb.report import to_json, to_markdown, to_text
 
@@ -116,6 +116,11 @@ def hive_main(argv: list[str] | None = None) -> int:
     return guarded("hive", lambda a: _run_checks(a, a.bees, "hive"))(args)
 
 
+def _subcommands(bee: str) -> Sequence[Subcommand]:
+    """The extra subcommands of `bee`, from its own `cli.py`; imported here so only this bee is loaded."""
+    return importlib.import_module(f".bees.{bee}.cli", __package__).SUBCOMMANDS
+
+
 def _bee_main(bee: str, description: str, argv: list[str] | None, extra: Sequence[Subcommand] = ()) -> int:
     """A bee's command: `check` plus the bee's `extra` subcommands."""
     prog = f"{bee}-bee"
@@ -138,14 +143,14 @@ def meta_bee_main(argv: list[str] | None = None) -> int:
     return _bee_main("meta", "Check metadata and structure of an anemoi dataset, and write and compare meta "
                      "files. See docs/meta-bee.md.",
                      argv,
-                     extra=META_SUBCOMMANDS)
+                     extra=_subcommands("meta"))
 
 
 def stats_bee_main(argv: list[str] | None = None) -> int:
     return _bee_main("stats", "Check values and statistics of an anemoi dataset, and write and compare "
                      "stats files. See docs/stats-bee.md.",
                      argv,
-                     extra=STATS_SUBCOMMANDS)
+                     extra=_subcommands("stats"))
 
 
 def spot_bee_main(argv: list[str] | None = None) -> int:

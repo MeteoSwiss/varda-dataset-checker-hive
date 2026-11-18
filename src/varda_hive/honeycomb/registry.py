@@ -59,7 +59,7 @@ def check(bee: str, name: str | None = None) -> Callable[[CheckFn], CheckFn]:
 
 
 def checks_for(bee: str) -> list[CheckInfo]:
-    _load_bees()
+    _load_bee(bee)
     return list(_REGISTRY[bee].values())
 
 
@@ -113,7 +113,7 @@ def _apply_ignore(finding: Finding, variables: list[str] | None) -> Finding:
     return finding
 
 
-def _load_bees() -> None:
-    # Importing the bee packages registers their checks. Imported by name, at call time, because
-    # the bees import the honeycomb themselves.
-    importlib.import_module("..bees", __package__)
+def _load_bee(bee: str) -> None:
+    # Importing a bee's checks module registers its checks. Only that bee is imported, so the bees stay
+    # independent. Imported by name, at call time, because the bees import the honeycomb themselves.
+    importlib.import_module(f"..bees.{bee}.checks", __package__)
