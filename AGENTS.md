@@ -37,7 +37,8 @@ Single test: `uv run pytest tests/test_bees.py::<test_name>`. The `faulty` marke
 default (`addopts` in `pyproject.toml`); `uv run pytest -m faulty` runs on Varda-tiny on /scratch
 and skips when the data is missing (paths overridable via `HIVE_FAULTY_DIR` / `HIVE_CLEAN_DS`, see
 `tests/test_faulty_tiny.py`; spot-bee's GRIB tests also use `HIVE_ICH1_ROOT`, see
-`tests/test_spot_ich1.py`). eccodes (`grib` extra) is in the `test` group, so `uv sync` installs it.
+`tests/test_spot_ich1.py`). The `fdb` marker (also deselected) runs FdbSource against a real FDB
+inside the FDB uenv, see `tests/test_fdb_realch1.py`. eccodes (`grib` extra) is in the `test` group, so `uv sync` installs it.
 
 ## Architecture in brief
 
@@ -62,6 +63,7 @@ and skips when the data is missing (paths overridable via `HIVE_FAULTY_DIR` / `H
   (`README.md`, `docs/<bee>.md`) and `templates/spec.example.yaml`.
 - New files carry the BSD-3-Clause license header used in existing sources.
 - Reusable source plug-ins live in `src/varda_hive/sources/`; the honeycomb and the bees never
-  import them, so their optional dependencies (eccodes: `grib` extra) stay optional.
+  import them, so their optional dependencies (eccodes: `grib` extra; pyfdb: `fdb` extra) stay
+  optional. GRIB decoding shared by the sources is in `sources/_grib.py`.
 - spot-bee does not reimplement derived variables or computed forcings; they are reported as not
   comparable (see docs/spot-bee.md).

@@ -87,3 +87,66 @@ def test_markdown_report(dataset_path, capsys):
     assert hive_main([str(dataset_path), "--format", "markdown"]) == 0
     out = capsys.readouterr().out
     assert out.startswith("### varda-hive: passed") and "<details>" in out
+
+
+def test_hive_dump_ref_file(dataset_path, tmp_path, write_spec, capsys):
+    """`hive dump` writes one ref file; the spec's `reference` makes meta-bee and stats-bee compare with it."""
+    from varda_hive.cli import meta_bee_main
+
+    import yaml  # pylint: disable=import-outside-toplevel
+
+    spec = write_spec("sampling: {n_dates: 3, seed: 1}\n")
+    ref = tmp_path / "data.ref.yaml"
+    assert hive_main(["dump", str(dataset_path), "--spec", str(spec), "-o", str(ref)]) == 0
+    content = yaml.safe_load(ref.read_text())
+    assert content["format"] == "varda-hive-ref/1"
+    assert content["meta"]["format"] == "varda-hive-meta/1" and content["stats"]["format"] == "varda-hive-stats/4"
+    dates = content["stats"]["sampling"]["dates"]
+
+    full = write_spec("reference: data.ref.yaml\nsampling: {n_dates: 3, seed: 1}\n", name="full.yaml")
+    select = ["--select", "matches_reference", "matches_reference_stats"]
+    assert hive_main([str(dataset_path), "--spec", str(full), "--strict", *select]) == 0
+    # each bee's compare takes its own section, --dates-from the stats section
+    assert meta_bee_main(["compare", str(dataset_path), str(ref)]) == 0
+    assert stats_bee_main(["compare", str(ref), str(ref)]) == 0
+    other = tmp_path / "other.ref.yaml"
+    assert hive_main(["dump", str(dataset_path), "--dates-from", str(ref), "--bees", "stats", "-o", str(other)]) == 0
+    assert yaml.safe_load(other.read_text())["stats"]["sampling"]["dates"] == dates
+    assert "meta" not in yaml.safe_load(other.read_text())
+    capsys.readouterr()
+
+    # a changed dataset: both comparisons see it (metadata differences are warnings by default)
+    zarr.open_group(str(dataset_path), mode="r+")["data"][:, 3] *= 2
+    metadata = json.loads((dataset_path / ".zattrs").read_text())
+    metadata["variables_metadata"]["T_850"]["mars"]["levelist"] = 800
+    (dataset_path / ".zattrs").write_text(json.dumps(metadata))
+    assert hive_main([str(dataset_path), "--spec", str(full), *select, "--format", "json"]) == 1
+    failed = {(f["check"], f["severity"]) for f in json.loads(capsys.readouterr().out)["findings"]}
+    assert {("matches_reference", "WARNING"), ("matches_reference_stats", "ERROR")} <= failed
+
+    # without a meta section: meta-bee skips (fails --strict), compare is a configuration error
+    assert hive_main([str(dataset_path), "--reference", str(other), "--select", "matches_reference", "--strict"]) == 1
+    assert meta_bee_main(["compare", str(dataset_path), str(other)]) == 2
+    assert "without a `meta` section" in capsys.readouterr().err
+
+
+def test_reference_kinds(dataset_path, tmp_path, capsys):
+    """A meta file is no stats reference and a stats file no meta reference: the other bee skips."""
+    from varda_hive.cli import meta_bee_main
+
+    meta, stats = tmp_path / "ref.meta.yaml", tmp_path / "ref.stats.yaml"
+    assert meta_bee_main(["dump", str(dataset_path), "-o", str(meta)]) == 0
+    assert stats_bee_main(["dump", str(dataset_path), "-o", str(stats)]) == 0
+    capsys.readouterr()
+    for ref, skipped in ((meta, "matches_reference_stats"), (stats, "matches_reference"), (dataset_path,
+                                                                                           "matches_reference_stats")):
+        assert hive_main([str(dataset_path), "--reference", str(ref), "--format", "json"]) == 0
+        findings = json.loads(capsys.readouterr().out)["findings"]
+        assert [f["check"] for f in findings if f.get("skipped") and "reference" in f["check"]] == [skipped]
+
+
+def test_hive_dump_errors(dataset_path, tmp_path, capsys):
+    assert hive_main(["dump", str(tmp_path / "nope.zarr")]) == 2
+    assert hive_main(["dump", str(dataset_path), "--dates-from", str(tmp_path / "nope.yaml")]) == 2
+    assert hive_main(["dump", str(dataset_path)]) == 0  # JSON to stdout
+    assert json.loads(capsys.readouterr().out)["format"] == "varda-hive-ref/1"

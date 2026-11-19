@@ -16,43 +16,46 @@ code tells the job what happened:
 | 2 | configuration error: missing dataset, invalid spec, missing reference, unknown `--select` name | fails: fix the job or the spec |
 | 3 | internal error of the hive | fails: report it with the traceback |
 
-- `--strict` fails when a check is skipped, e.g. because the spec has no `ranges_file` or no
-  reference. Otherwise a misconfigured job stays green.
+- `--strict` fails when a check is skipped, e.g. because no variable in the spec has a range, or the
+  spec has no reference. Otherwise a misconfigured job stays green.
 - `--report hive.json` writes every finding, while `--format markdown` prints a summary for the
   merge request or the job summary (`--format text`, the default, is meant for the log).
 - `--fail-on warning` also fails on warnings. Known, accepted warnings can be demoted to INFO in the
   spec, so it stays usable: `ignore_warnings: {statistics_consistent: [insolation]}`.
 - `--bees meta stats` runs only some bees, e.g. on a runner that cannot read the source data. spot-bee
-  needs the source (e.g. the GRIB archive and its grib-index DBs) and the `grib` extra; without a
-  `source` in the spec it is skipped, which fails under `--strict`.
+  needs the source (e.g. the GRIB archive and its grib-index DBs with the `grib` extra, or an FDB with
+  the `fdb` extra, run inside the FDB uenv); without a `source` in the spec it is skipped, which
+  fails under `--strict`.
 
 ## Publishing a dataset
 
-The spec, the reference files and the CI job all live in the dataset repo, next to the recipe.
+The spec, the ref file and the CI job all live in the dataset repo, next to the recipe.
 
 1. **Set up the spec** once, from the recipe: see [Setting up a dataset](../README.md#setting-up-a-dataset).
 2. **Build and check** the first version: `hive data.zarr --spec checks/<dataset>.yaml`. Review every
    finding; fix the dataset or the spec.
-3. **Accept it** by writing its reference files, and commit them with the spec:
+3. **Accept it** by writing its ref file, and commit it with the spec:
 
    ```bash
-   meta-bee dump data.zarr -o checks/<dataset>.meta.yaml
-   stats-bee dump data.zarr --spec checks/<dataset>.yaml -o checks/<dataset>.stats.yaml
+   hive dump data.zarr --spec checks/<dataset>.yaml -o checks/<dataset>.ref.yaml
    ```
 
-   and set `reference_meta: <dataset>.meta.yaml` and `reference_stats: <dataset>.stats.yaml` in the spec.
+   and set `reference: <dataset>.ref.yaml` in the spec. The ref file holds meta-bee's meta file and
+   stats-bee's stats file.
 4. **Gate every rebuild** in CI with the command above. Each rebuild is compared with the accepted
    version: structure and metadata exactly ([meta-bee](meta-bee.md#the-reference-meta-files-and-compare)),
    statistics on the same sample ([stats-bee](stats-bee.md#stats-files)).
 5. **Intended changes** (a new variable, a new period, a new anemoi version) show up as differences.
-   Review them with the compare commands, then write new reference files and commit them together
-   with the spec change:
+   Review them with the compare commands, then write a new ref file and commit it together with the
+   spec change:
 
    ```bash
-   meta-bee compare new.zarr checks/<dataset>.meta.yaml
-   stats-bee dump new.zarr --spec checks/<dataset>.yaml --dates-from checks/<dataset>.stats.yaml -o new.stats.yaml
-   stats-bee compare new.stats.yaml checks/<dataset>.stats.yaml
+   hive dump new.zarr --spec checks/<dataset>.yaml --dates-from checks/<dataset>.ref.yaml -o new.ref.yaml
+   meta-bee compare new.ref.yaml checks/<dataset>.ref.yaml
+   stats-bee compare new.ref.yaml checks/<dataset>.ref.yaml
    ```
+
+   The CI job can write `new.ref.yaml` as an artifact, so accepting a change is a download.
 
    Accepted metadata churn can also be ignored for good with `reference_policy` in the spec, see
    [meta-bee](meta-bee.md#the-reference-meta-files-and-compare).

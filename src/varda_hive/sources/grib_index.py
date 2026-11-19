@@ -52,11 +52,9 @@ from typing import Any
 
 import numpy as np
 
-from ..honeycomb import Dataset, NotComparable
-
-# gridType values whose coordinates eccodes computes as geographic latitudes/longitudes.
-_CHECKED_GRIDS = {"regular_ll", "reduced_ll", "regular_gg", "reduced_gg"}
-GRID_ATOL_DEG = 1e-3  # GRIB stores coordinates to 1e-6 degrees, anemoi as float64
+from ..honeycomb import Dataset
+from ._grib import Decoder, dataset_coords, load_eccodes, map_targets, member_numbers, not_comparable, resolve
+from ._grib import text as _text
 
 
 @dataclass(frozen=True)
@@ -66,10 +64,6 @@ class _Target:
     match: dict[str, str]
     scale: float = 1.0
     offset: float = 0.0
-
-
-class _ConfigError(str):
-    """A variable's configuration error, raised by `fetch` so that only this variable fails."""
 
 
 @dataclass
@@ -115,42 +109,22 @@ class GribIndexSource:  # pylint: disable=too-many-instance-attributes
             if not db.is_file():
                 raise FileNotFoundError(f"grib index {db} not found")
         # variable -> target, the NotComparable reason, or the configuration error
-        self.targets: dict[str, _Target | str | _ConfigError] = {}
+        self.targets: dict[str, _Target | str] = {}
         self.numbers: list[str] = []  # GRIB `number` of each dataset member, empty for a single member
         self.n_members = 1
         self.n_grid: int | None = None
         self._rows: dict[tuple[str, str], list[dict[str, str]]] = {}  # (index, date) -> rows, latest date only
-        self._eccodes: Any = None
-        self._coords: tuple[np.ndarray, np.ndarray] | None = None  # dataset (latitudes, longitudes)
-        self._grids_checked: set[str] = set()  # md5GridSection of the grids that match the dataset
+        self._decoder: Decoder | None = None
 
     def bind(self, dataset: Dataset) -> None:
         """Map every dataset variable to its GRIB messages (or a reason not to compare it)."""
-        try:
-            import eccodes  # pylint: disable=import-outside-toplevel
-        except (ImportError, RuntimeError) as exc:
-            raise ImportError("GribIndexSource needs eccodes: install varda-dataset-checker-hive[grib]") from exc
-        self._eccodes = eccodes
-        if self.check_grid and dataset.latitudes is not None and dataset.longitudes is not None:
-            self._coords = (np.asarray(dataset.latitudes, np.float64), np.asarray(dataset.longitudes, np.float64))
+        eccodes = load_eccodes("GribIndexSource", "grib")
         for index in self.indexes.values():
             index.columns = set.intersection(*(_columns(db) for db in index.dbs))
         self.n_members, self.n_grid = dataset.data.shape[2], dataset.data.shape[-1]
-        if self.members is not None and len(self.members) != self.n_members:
-            raise ValueError(f"`members` lists {len(self.members)} GRIB numbers, dataset has {self.n_members} members")
-        # Match `number` when the spec names the members (also one member, e.g. a dataset of EPS member 5)
-        # or the dataset has several.
-        if self.members is not None:
-            self.numbers = [str(m) for m in self.members]
-        elif self.n_members > 1:
-            self.numbers = [str(m) for m in range(self.n_members)]
-        metadata = dataset.attrs.get("variables_metadata", {})
-        self.targets = {}
-        for name in dataset.variables:
-            try:
-                self.targets[name] = self._target(name, metadata.get(name, {}))
-            except (ValueError, KeyError, TypeError) as exc:
-                self.targets[name] = _ConfigError(f"source variable {name}: {exc}")
+        self.numbers = member_numbers(self.members, self.n_members)
+        self._decoder = Decoder(eccodes, self.n_grid, dataset_coords(dataset, self.check_grid))
+        self.targets = map_targets(dataset, self._target)
 
     def _target(self, name: str, meta: dict[str, Any]) -> _Target | str:
         if name in self.skip:
@@ -168,7 +142,7 @@ class GribIndexSource:  # pylint: disable=too-many-instance-attributes
                              scale=float(override.get("scale", 1.0)),
                              offset=float(override.get("offset", 0.0)))
         else:
-            reason = _not_comparable(meta)
+            reason = not_comparable(meta)
             if reason:
                 return reason
             mars = meta["mars"]
@@ -195,13 +169,7 @@ class GribIndexSource:  # pylint: disable=too-many-instance-attributes
         return target
 
     def fetch(self, variable: str, date: np.datetime64) -> np.ndarray | None:
-        target = self.targets.get(variable)
-        if target is None:
-            raise NotComparable("unknown to the source (bind was not called or variable not in dataset)")
-        if isinstance(target, _ConfigError):
-            raise ValueError(str(target))
-        if isinstance(target, str):
-            raise NotComparable(target)
+        target = resolve(self.targets, variable)
         rows = self._rows_at(target.index, str(np.datetime64(date, "s")))
         fields = []
         numbers: list[str | None] = [*self.numbers] or [None]
@@ -235,58 +203,12 @@ class GribIndexSource:  # pylint: disable=too-many-instance-attributes
         return self._rows[key]
 
     def _decode(self, path: str, offset: str, length: str) -> np.ndarray:
-        eccodes = self._eccodes
-        if eccodes is None:
+        if self._decoder is None:
             raise RuntimeError("GribIndexSource.bind was not called")
         with open(self.root / path, "rb") as f:
             f.seek(int(offset))
             message = f.read(int(length))
-        handle = eccodes.codes_new_from_message(message)
-        try:
-            n_points = eccodes.codes_get(handle, "numberOfDataPoints")
-            if self.n_grid is not None and n_points != self.n_grid:
-                raise ValueError(f"GRIB message in {path} has {n_points} points, dataset grid has {self.n_grid}")
-            self._check_grid(handle, path)
-            values = eccodes.codes_get_values(handle).astype(np.float64)
-            if eccodes.codes_get(handle, "bitmapPresent"):
-                # The bitmap, not the missingValue, marks missing points: a real value may equal missingValue.
-                values[eccodes.codes_get_array(handle, "bitmap") == 0] = np.nan
-        finally:
-            eccodes.codes_release(handle)
-        return values
-
-    def _check_grid(self, handle: Any, path: str) -> None:
-        """Raise if the message's grid coordinates are not the dataset's, once per distinct grid."""
-        eccodes = self._eccodes
-        if self._coords is None or eccodes.codes_get(handle, "gridType") not in _CHECKED_GRIDS:
-            return
-        grid = eccodes.codes_get(handle, "md5GridSection")
-        if grid in self._grids_checked:
-            return
-        lat = eccodes.codes_get_array(handle, "latitudes")
-        lon = eccodes.codes_get_array(handle, "longitudes")
-        lat_ds, lon_ds = self._coords
-        deviation = np.maximum(np.abs(lat - lat_ds), np.abs((lon - lon_ds + 180) % 360 - 180))
-        worst = int(np.argmax(deviation))
-        if deviation[worst] > GRID_ATOL_DEG:
-            raise ValueError(f"GRIB grid in {path} is not the dataset's: point {worst} is at "
-                             f"({lat[worst]:.4f}, {lon[worst]:.4f}) in GRIB, ({lat_ds[worst]:.4f}, "
-                             f"{lon_ds[worst]:.4f}) in the dataset (cropped, thinned or reordered grid?)")
-        self._grids_checked.add(grid)
-
-
-def _not_comparable(meta: dict[str, Any]) -> str | None:
-    """Why a variable has no one-to-one GRIB message, from its variables_metadata entry."""
-    if meta.get("computed_forcing"):
-        return "computed forcing"
-    if meta.get("process"):
-        period = meta.get("period")
-        return f"derived field ({meta['process']}" + (f" over {period[0]}..{period[1]})" if period else ")")
-    if meta.get("constant_in_time"):
-        return "constant field, not in the time-indexed source"
-    if not isinstance(meta.get("mars"), dict) or "param" not in meta["mars"]:
-        return "no mars metadata"
-    return None
+        return self._decoder.decode(message, path)
 
 
 def _connect(db: Path) -> sqlite3.Connection:
@@ -300,10 +222,3 @@ def _columns(db: Path) -> set[str]:
     if not columns:
         raise ValueError(f"{db} has no grib_index table")
     return columns
-
-
-def _text(value: Any) -> str:
-    """Index values are text; numbers in the spec or metadata (850, 0.01) compare as the index writes them."""
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
-    return "" if value is None else str(value)

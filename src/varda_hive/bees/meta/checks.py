@@ -18,9 +18,10 @@ from typing import Any, Iterator
 
 import numpy as np
 
-from ...honeycomb import CheckContext, Finding, check, error, info, load_ranges, load_variables_file, skipped, warning
+from ...honeycomb import CheckContext, Finding, check, error, info, skipped, warning
 from ...honeycomb.dataset import STATISTICS, Dataset, format_frequency, parse_date, parse_frequency
-from .metafile import compare_meta, fingerprint, load_reference
+from ...honeycomb.files import provides
+from .metafile import FORMAT, compare_meta, fingerprint, load_reference
 
 MAX_LISTED = 10  # findings of one kind before the rest are summarised in one
 
@@ -224,7 +225,7 @@ def variables_metadata_consistent(ctx: CheckContext) -> Iterator[Finding]:
 @check("meta")
 def variables_match_spec(ctx: CheckContext) -> Iterator[Finding]:
     """The dataset has exactly the variables listed in the spec."""
-    expected = ctx.spec.variables
+    expected = ctx.spec.variable_names()
     if expected is None:
         yield skipped("no `variables` in spec")
         return
@@ -284,11 +285,12 @@ def grid_matches_spec(ctx: CheckContext) -> Iterator[Finding]:
 def flags_match_spec(ctx: CheckContext) -> Iterator[Finding]:
     """`allow_nans` and `missing_dates` are the spec's."""
     spec, attrs = ctx.spec, ctx.dataset.attrs
-    if spec.allow_nans is None and spec.missing_dates is None:
+    expected_nans = spec.nan_variables()
+    if expected_nans is None and spec.missing_dates is None:
         yield skipped("no `allow_nans` or `missing_dates` in spec")
         return
-    if spec.allow_nans is not None and attrs.get("allow_nans") != spec.allow_nans:
-        yield error(f"`allow_nans` is {attrs.get('allow_nans')}, the spec expects {spec.allow_nans}")
+    if expected_nans is not None:
+        yield from _compare_allow_nans(attrs.get("allow_nans", False), expected_nans)
     if spec.missing_dates is not None:
         actual = {parse_date(d) for d in attrs.get("missing_dates") or []}
         expected = {parse_date(d.isoformat()) for d in spec.missing_dates}
@@ -296,6 +298,28 @@ def flags_match_spec(ctx: CheckContext) -> Iterator[Finding]:
             yield error("date listed in `missing_dates` but not in the spec's", time=str(d))
         for d in sorted(expected - actual):
             yield error("date in the spec's `missing_dates` but not listed by the dataset", time=str(d))
+
+
+def _nan_set(value: Any) -> bool | set[str]:
+    """`allow_nans` as True (everywhere) or the set of variables, where false is the empty set."""
+    if isinstance(value, (list, set, tuple)):
+        return {str(v) for v in value}
+    return True if value is True else set()
+
+
+def _compare_allow_nans(actual: Any, expected: bool | set[str]) -> Iterator[Finding]:
+    """The dataset's `allow_nans` (a bool or a list of variables) against the spec's."""
+    have, want = _nan_set(actual), _nan_set(expected)
+    if isinstance(have, set) and isinstance(want, set):
+        for name in sorted(have - want):
+            yield error("NaNs allowed by the dataset's `allow_nans` but not by the spec", variable=name)
+        for name in sorted(want - have):
+            yield error("NaNs allowed by the spec but not listed in the dataset's `allow_nans`", variable=name)
+    elif have != want:
+        shown = sorted(want) if isinstance(want, set) else want
+        hint = (" (list the variables in the spec's `allow_nans`, or set `allow_nans: true` on them)" if isinstance(
+            have, set) else "")
+        yield error(f"`allow_nans` is {actual!r}, the spec expects {shown!r}{hint}")
 
 
 def _lookup(entry: dict, key: str) -> tuple[bool, Any]:
@@ -308,26 +332,23 @@ def _lookup(entry: dict, key: str) -> tuple[bool, Any]:
 
 @check("meta")
 def variables_metadata_match_spec(ctx: CheckContext) -> Iterator[Finding]:
-    """Per-variable metadata (mars param, level, ...) matches the spec's `variables_file`, and units
-    match the `ranges_file`."""
+    """Per-variable metadata (mars param, level, units, ...) matches the spec's `variables` entries."""
     spec, ds = ctx.spec, ctx.dataset
-    expected = load_variables_file(spec.variables_file) if spec.variables_file else {}
-    units = {v: r.units for v, r in load_ranges(spec.ranges_file).items() if r.units} if spec.ranges_file else {}
+    expected, units = spec.expected_metadata(), spec.units()
     if not expected and not units:
-        yield skipped("no `variables_file` (and no units in a `ranges_file`) in spec")
+        yield skipped("no per-variable metadata or units in the spec's `variables`")
         return
     metadata = ds.attrs.get("variables_metadata") or {}
     for name, keys in expected.items():
         if name not in metadata:
-            yield error("no `variables_metadata` entry to compare with the `variables_file`", variable=name)
+            yield error("no `variables_metadata` entry to compare with the spec", variable=name)
             continue
         for key, value in keys.items():
             found, actual = _lookup(metadata[name], key)
             if not found:
-                yield error(f"`{key}` missing from `variables_metadata`, the `variables_file` expects {value!r}",
-                            variable=name)
+                yield error(f"`{key}` missing from `variables_metadata`, the spec expects {value!r}", variable=name)
             elif str(actual) != str(value):
-                yield error(f"`{key}` is {actual!r}, the `variables_file` expects {value!r}", variable=name)
+                yield error(f"`{key}` is {actual!r}, the spec expects {value!r}", variable=name)
     without = []
     for name, unit in units.items():
         if name not in metadata:
@@ -336,9 +357,9 @@ def variables_metadata_match_spec(ctx: CheckContext) -> Iterator[Finding]:
         if not found:
             without.append(name)
         elif str(actual) != unit:
-            yield error(f"units are {actual!r}, the `ranges_file` says {unit!r}", variable=name)
+            yield error(f"units are {actual!r}, the spec says {unit!r}", variable=name)
     if without:
-        yield warning(f"the dataset stores no units for {len(without)} variables with units in the `ranges_file`",
+        yield warning(f"the dataset stores no units for {len(without)} variables with units in the spec",
                       details={"variables": without})
 
 
@@ -347,11 +368,14 @@ def variables_metadata_match_spec(ctx: CheckContext) -> Iterator[Finding]:
 
 @check("meta")
 def matches_reference(ctx: CheckContext) -> Iterator[Finding]:
-    """Metadata and structure match the reference (`--reference` or the spec's `reference_meta`), a
-    meta file or a zarr. Same comparison as `meta-bee compare`."""
-    path = ctx.reference or ctx.spec.reference_meta
+    """Metadata and structure match the reference (`--reference` or the spec's `reference`): a ref
+    file, a meta file or a zarr. Same comparison as `meta-bee compare`."""
+    path = ctx.reference_path
     if path is None:
-        yield skipped("no reference: give `--reference` or `reference_meta` in the spec")
+        yield skipped("no reference: give `--reference` or `reference` in the spec")
+        return
+    if not provides(path, "meta", FORMAT):
+        yield skipped(f"the reference {path} has no meta section (a stats file?)")
         return
     comparison = compare_meta(fingerprint(ctx.dataset), load_reference(path), ctx.spec.reference_policy)
     yield from comparison.findings

@@ -19,7 +19,12 @@ from varda_hive.honeycomb.dataset import format_frequency, parse_frequency
 from varda_hive.bees.meta.metafile import fingerprint, save_meta
 
 SPEC = f"""
-variables: {VARIABLES}
+variables:
+  FIS:
+  T_2M: {{param: T_2M, levtype: sfc}}
+  T_850: {{param: T, levtype: pl, levelist: 850}}
+  U_10M:
+  V_10M:
 start_date: 2020-03-01T00:00:00
 end_date: 2020-03-01T{NT - 1:02d}:00:00
 frequency: 1h
@@ -28,12 +33,7 @@ resolution: 2km
 bbox: {{lat_min: 45, lat_max: 48, lon_min: 5, lon_max: 11}}
 allow_nans: false
 missing_dates: []
-variables_file: variables.yaml
-reference_meta: reference.meta.yaml
-"""
-VARIABLES_FILE = """
-T_850: {param: T, levtype: pl, levelist: 850}
-T_2M: {param: T_2M, levtype: sfc}
+reference: reference.meta.yaml
 """
 
 
@@ -160,11 +160,10 @@ def _varmeta_extra(p: Path) -> None:
 
 @pytest.fixture
 def spec_dir(tmp_path):
-    """A full spec, its variables file and the reference meta file of the clean dataset."""
+    """A full spec and the reference meta file of the clean dataset."""
     d = tmp_path / "checks"
     d.mkdir()
     (d / "spec.yaml").write_text(SPEC)
-    (d / "variables.yaml").write_text(VARIABLES_FILE)
     save_meta(fingerprint(Dataset(build_dataset(tmp_path / "reference.zarr"))), d / "reference.meta.yaml")
     return d
 
@@ -223,9 +222,8 @@ def test_extra_timesteps(tmp_path, spec_dir):
     assert errors == {"dates_match_spec", "matches_reference"}
 
 
-def test_units_from_ranges_file(dataset_path, write_spec):
-    (dataset_path.parent / "ranges.yaml").write_text("T_2M: {min: 180, max: 340, units: K}\n")
-    spec = load_spec(write_spec("ranges_file: ranges.yaml\n"))
+def test_units_from_spec(dataset_path, write_spec):
+    spec = load_spec(write_spec("variables: {T_2M: {min: 180, max: 340, units: K}}\n"))
     [f] = [f for f in _findings(dataset_path, spec) if f.check == "variables_metadata_match_spec"]
     assert f.severity == Severity.WARNING and "no units for 1 variables" in f.message
     metadata = json.loads((dataset_path / ".zattrs").read_text())["variables_metadata"]
@@ -261,22 +259,27 @@ def test_bad_frequency(dataset_path):
             for f in _findings(dataset_path, Spec()) if f.severity == Severity.WARNING} == {"frequency_consistent"}
 
 
-def test_invalid_variables_file(write_spec, tmp_path):
-    (tmp_path / "variables.yaml").write_text("T_2M: {param: [a, b]}\n")
+def test_invalid_variable_entries(write_spec):
     with pytest.raises(ValueError, match="scalar"):
-        load_spec(write_spec("variables_file: variables.yaml\n"))
-    with pytest.raises(FileNotFoundError, match="reference_meta"):
-        load_spec(write_spec("reference_meta: nope.meta.yaml\n"))
+        load_spec(write_spec("variables: {T_2M: {param: [a, b]}}\n"))
+    with pytest.raises(ValueError, match="min 300.0 > max 200.0"):
+        load_spec(write_spec("variables: {T_2M: {min: 300, max: 200}}\n"))
+    with pytest.raises(ValueError):
+        load_spec(write_spec("variables: {T_2M: {min: cold}}\n"))
+    with pytest.raises(FileNotFoundError, match="reference not found"):
+        load_spec(write_spec("reference: nope.meta.yaml\n"))
 
 
 def test_templates_load(tmp_path):
     """The templates, copied as the README says, form a valid spec."""
     templates = Path(__file__).resolve().parents[1] / "templates"
-    for src, dst in (("spec.example.yaml", "spec.yaml"), ("physical_ranges.example.yaml", "physical_ranges.yaml"),
-                     ("variables.example.yaml", "variables.yaml")):
-        (tmp_path / dst).write_text((templates / src).read_text())
+    (tmp_path / "spec.yaml").write_text((templates / "spec.example.yaml").read_text())
+    (tmp_path / "data.ref.yaml").write_text("format: varda-hive-ref/1\n")
     spec = load_spec(tmp_path / "spec.yaml")
-    assert spec.bbox is not None and spec.variables_file is not None and spec.reference_policy.ignore
+    assert spec.bbox is not None and spec.reference_policy.ignore
+    assert spec.ranges() and spec.expected_metadata() and spec.constant_field_names()
+    # the anchors share one range
+    assert spec.ranges()["U_10M"] == spec.ranges()["V_10M"]
 
 
 def test_constant_fields_both_directions(dataset_path):
@@ -313,14 +316,13 @@ def test_long_list_of_findings_is_capped(tmp_path):
     assert len(findings) == 11 and findings[-1].message == "... and 4 more unordered dates"
 
 
-def test_variables_file_entry_or_key_missing(dataset_path, spec_dir):
-    (spec_dir / "variables.yaml").write_text("T_2M: {param: T_2M, units: K}\nW_SO: {param: W_SO}\n")
-    spec = load_spec(spec_dir / "spec.yaml")
+def test_variables_metadata_entry_or_key_missing(dataset_path, write_spec):
+    spec = load_spec(write_spec("variables: {T_2M: {param: T_2M, unit: K}, W_SO: {param: W_SO}}\n"))
     findings = [f for f in _findings(dataset_path, spec) if f.check == "variables_metadata_match_spec"]
     assert {(f.variable, f.message.split(",")[0])
             for f in findings} == {
-                ("T_2M", "`units` missing from `variables_metadata`"),
-                ("W_SO", "no `variables_metadata` entry to compare with the `variables_file`"),
+                ("T_2M", "`unit` missing from `variables_metadata`"),
+                ("W_SO", "no `variables_metadata` entry to compare with the spec"),
             }
 
 

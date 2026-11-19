@@ -14,16 +14,16 @@ source is spot-bee's job.
 | check | what | severity |
 |---|---|---|
 | `statistics_consistent` | stored mean/stdev/min/max are self-consistent (no NaN, min <= mean <= max, stdev 0 exactly when min == max) and match the ones recomputed from the sample | ERROR / WARNING, see [tolerances](#how-the-tolerances-work) |
-| `physical_ranges` | per-date and stored min/max inside the ranges of the spec's `ranges_file` | ERROR |
-| `finite_values` | no inf on the sampled dates and points, and no NaN unless the dataset sets `allow_nans` | ERROR |
+| `physical_ranges` | per-date and stored min/max inside the `min`/`max` of the spec's `variables` | ERROR |
+| `finite_values` | no inf on the sampled dates and points, and NaN only in the variables allowed to have them, see [NaNs](#nans) | ERROR |
 | `statistics_window_valid` | `statistics_start_date` <= `statistics_end_date`, both within the dataset's dates | ERROR / WARNING if missing |
-| `constant_fields` | fields in `constant_fields` don't change between dates (ERROR); other fields aren't identical on all dates, or uniform in space on one date (WARNING, computed forcings exempt) | ERROR / WARNING |
-| `matches_reference_stats` | stored and sample statistics match the spec's `reference_stats`, on the reference's sample, see [stats files](#stats-files) | ERROR / WARNING |
+| `constant_fields` | fields in `constant_fields` (the dataset's, else the spec's variables with `constant: true`) don't change between dates (ERROR); other fields aren't identical on all dates, or uniform in space on one date (WARNING, computed forcings exempt) | ERROR / WARNING |
+| `matches_reference_stats` | stored and sample statistics match the stats section of the spec's `reference` (a ref file or a stats file), on the reference's sample, see [stats files](#stats-files) | ERROR / WARNING |
 
 ```bash
 uv run stats-bee check <dataset.zarr> --spec <spec.yaml>            # run the checks
 uv run stats-bee dump <dataset.zarr> --spec <spec.yaml> -o out.yaml  # write a stats file
-uv run stats-bee compare out.yaml reference.yaml                     # compare two stats files
+uv run stats-bee compare out.yaml reference.yaml                     # compare two stats files (or ref files)
 uv run stats-bee calibrate <dataset.zarr> --spec <spec.yaml> -o tol.yaml  # calibrated tolerances
 ```
 
@@ -41,6 +41,20 @@ what is on disk. It reads the `.zattrs` keys that anemoi writes:
 - `variables_metadata[...].computed_forcing`
 
 It also reads the arrays `data`, `dates`, `mean`, `stdev`, `minimum` and `maximum`.
+
+### NaNs
+
+anemoi's `allow_nans` is a bool or the list of variables that may contain NaNs (e.g. fields
+undefined over part of the domain). `finite_values` allows NaNs in:
+- the dataset's list, if `allow_nans` is a list
+- otherwise the spec's: the variables with `allow_nans: true` in a `variables` mapping, or the
+  spec's `allow_nans` list
+- every variable (NaNs not checked, an INFO) only for `allow_nans: true` without a list in the spec
+
+meta-bee's `flags_match_spec` checks that the dataset's list is the spec's. The stored statistics of
+a variable with NaNs cover its finite values; stats-bee recomputes them the same way, weighting
+each date by its number of finite values. A variable that is NaN everywhere has NaN statistics: an
+ERROR of `statistics_consistent`.
 
 **The sample.** The `n_dates` random dates are drawn stratified (one per equal block) over the
 **whole time range**, plus the `include_dates`, so the value checks also see the dates after the
@@ -76,6 +90,10 @@ The current format is `varda-hive-stats/4`. Files of older formats are rejected:
 with `stats-bee dump`.
 
 ### Reference workflow in a dataset repo
+
+Usually the stats file is the `stats` section of the dataset's ref file, written together with
+meta-bee's meta file by `hive dump` (see [ci.md](ci.md)). Every command below that reads a stats
+file also takes a ref file. With stats-bee alone:
 
 ```
 fresh dataset ──► stats-bee check data.zarr              "is this dataset internally OK?"
@@ -115,7 +133,7 @@ names the variable and statistic, not the date. Each value is:
   zero, like wind components or precipitation.
 - *differs*: anything else
 
-With `reference_stats` in the spec, `stats-bee check` (and `hive`) run the same comparison as the
+With `reference` in the spec, `stats-bee check` (and `hive`) run the same comparison as the
 `matches_reference_stats` check, on the reference's dates. See [ci.md](ci.md) for the whole publishing workflow
 with all bees.
 

@@ -219,9 +219,10 @@ def estimate(  # pylint: disable=too-many-locals
         full_domain: bool = True) -> dict[str, dict[str, Any]]:
     """Estimate the window statistics from the per-date summaries of a random sample of dates.
 
-    Every date has the same number of values, so the mean is the mean of the per-date means and
-    the (population) variance is mean(per-date variance) + var(per-date means); both are exact
-    when every date of the window and every point was read (`exact`). The standard error of the
+    The mean and the (population) variance pool the per-date means and variances, weighted by the
+    number of finite values of each date (equal weights without NaNs), as anemoi computes the stored
+    statistics of a variable with NaNs; both are exact when every date of the window and every point
+    was read (`exact`). The standard error of the
     mean is analytic (dates are the sampling unit, with finite population correction `fpc`); the
     one of the stdev comes from a seeded bootstrap over the dates. Both cover the sampling of
     dates only, and are estimated from the sample, so they are unreliable for small samples of
@@ -229,6 +230,7 @@ def estimate(  # pylint: disable=too-many-locals
     """
     n = len(summary)
     m, s, lo, hi = (summary[:, :, j] for j in range(4))
+    w = summary[:, :, SUMMARY.index("n_finite")]
     fpc = math.sqrt(max(0.0, 1 - n / n_window)) if n_window else 0.0
     exact = n == n_window and full_domain
     out: dict[str, dict[str, Any]] = {
@@ -245,12 +247,11 @@ def estimate(  # pylint: disable=too-many-locals
         return out
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
-        mean = m.mean(axis=0)
-        stdev = np.sqrt((s**2).mean(axis=0) + m.var(axis=0))
-        se_mean = m.std(axis=0, ddof=1) / math.sqrt(n) * fpc if n > 1 else np.full(len(variables), np.nan)
+        mean, stdev = _pooled(m, s, w, axis=0)
+        se_mean = np.nanstd(m, axis=0, ddof=1) / math.sqrt(n) * fpc if n > 1 else np.full(len(variables), np.nan)
         if n > 1 and fpc > 0:
             idx = np.random.default_rng([seed, 2]).integers(0, n, size=(N_BOOTSTRAP, n))
-            boot = np.sqrt((s[idx]**2).mean(axis=1) + m[idx].var(axis=1))
+            boot = _pooled(m[idx], s[idx], w[idx], axis=1)[1]
             se_stdev = boot.std(axis=0, ddof=1) * fpc
         else:
             se_stdev = np.zeros(len(variables)) if fpc == 0 else np.full(len(variables), np.nan)
@@ -264,6 +265,18 @@ def estimate(  # pylint: disable=too-many-locals
             "se_stdev": _num(se_stdev[i])
         }
     return out
+
+
+def _pooled(m: np.ndarray, s: np.ndarray, w: np.ndarray, axis: int) -> tuple[np.ndarray, np.ndarray]:
+    """Pooled mean and stdev of groups with means `m`, stdevs `s` and `w` values each, along `axis`.
+    Groups without a finite value (NaN mean) have no weight; no group at all gives NaN."""
+    w = np.where(np.isfinite(m) & np.isfinite(s), w, 0.0)
+    m, s = np.nan_to_num(m), np.nan_to_num(s)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        total = w.sum(axis=axis)
+        mean = (w * m).sum(axis=axis) / total
+        var = (w * (s**2 + (m - np.expand_dims(mean, axis))**2)).sum(axis=axis) / total
+    return mean, np.sqrt(var)
 
 
 def _num(x: Any, kind: Callable[[float], float] = float) -> float | None:
@@ -339,7 +352,7 @@ def save_stats(stats: dict, path: str | Path | None) -> None:
 
 
 def load_stats(path: str | Path) -> dict:
-    return read_file(path, FORMAT, "stats file", "stats-bee dump")
+    return read_file(path, FORMAT, "stats file", "stats-bee dump", section="stats")
 
 
 # --- comparing two stats files ---------------------------------------------------------------

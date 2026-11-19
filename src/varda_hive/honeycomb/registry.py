@@ -27,8 +27,13 @@ BEES = ("meta", "stats", "spot")
 class CheckContext:
     dataset: Dataset
     spec: Spec
-    reference: Path | None = None  # `--reference`: a zarr or a meta file (meta-bee)
+    reference: Path | None = None  # `--reference`, overrides the spec's `reference`
     cache: dict = field(default_factory=dict)  # shared between checks of one run, e.g. a loaded source
+
+    @property
+    def reference_path(self) -> Path | None:
+        """The reference to compare with: `--reference`, else the spec's `reference`."""
+        return self.reference or self.spec.reference
 
 
 CheckFn = Callable[[CheckContext], Iterable[Finding]]

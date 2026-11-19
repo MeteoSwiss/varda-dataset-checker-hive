@@ -8,6 +8,7 @@ datasets. It does not need anemoi-datasets.
 uv run meta-bee check data.zarr --spec checks/data.yaml           # all meta checks
 uv run meta-bee dump data.zarr -o checks/data.meta.yaml            # meta file of the accepted version
 uv run meta-bee compare new.zarr checks/data.meta.yaml             # what is identical, what differs
+uv run meta-bee compare new.zarr checks/data.ref.yaml              # the meta section of a ref file (`hive dump`)
 uv run meta-bee compare new.zarr published.zarr --all              # every item, identical ones too
 ```
 
@@ -25,9 +26,9 @@ uv run meta-bee compare new.zarr published.zarr --all              # every item,
 | `variables_match_spec` | `variables` | variables missing or not expected |
 | `dates_match_spec` | `start_date`, `end_date`, `frequency` | other date range or step |
 | `grid_matches_spec` | `grid_points`, `resolution`, `bbox` | other grid size, resolution or extent (shifted or swapped coordinates) |
-| `flags_match_spec` | `allow_nans`, `missing_dates` | other flags, dates unexpectedly listed as missing |
-| `variables_metadata_match_spec` | `variables_file`, `ranges_file` units | wrong mars param/levtype/levelist; units differing from the ranges file (WARNING when the dataset stores none) |
-| `matches_reference` | `reference_meta` or `--reference` | any difference to the accepted version, see below |
+| `flags_match_spec` | `allow_nans` (or a `variables` mapping), `missing_dates` | NaNs allowed in other variables than the spec's, dates unexpectedly listed as missing |
+| `variables_metadata_match_spec` | per-variable keys and `units` in `variables` | wrong mars param/levtype/levelist; units differing from the spec (WARNING when the dataset stores none) |
+| `matches_reference` | `reference` or `--reference` | any difference to the accepted version, see below |
 
 The first group replaces `anemoi-datasets validate`, which catches 3 of the 13 metadata faults of
 Varda-tiny. meta-bee reports all of them: 12 as ERROR, and `m-stats-dates` as a WARNING against the
@@ -36,37 +37,41 @@ reference (its ERROR is stats-bee's `statistics_window_valid`). See `tests/test_
 ## Spec fields
 
 ```yaml
-variables: [...]
+variables:
+  T_2M: {param: T_2M, levtype: sfc, units: K}
+  T_850: {param: T, levtype: pl, levelist: 850}
+  CIN_MU: {param: CIN_MU, levtype: sfc, allow_nans: true}
 start_date: 2020-03-01T00:00:00
 end_date: 2020-03-30T23:00:00
 frequency: 1h
 grid_points: 30676
 resolution: 2km
 bbox: {lat_min: 45.43, lat_max: 48.19, lon_min: 5.25, lon_max: 11.03, tolerance: 0.01}
-allow_nans: false
 missing_dates: []
-variables_file: variables.yaml          # see templates/variables.example.yaml
-reference_meta: data.meta.yaml          # a meta file or a zarr
+reference: data.ref.yaml                # a ref file (`hive dump`), a meta file or a zarr
 reference_policy: {ignore: [], error: [], warning: [], info: []}
 ```
 
 Write them from the anemoi **recipe**, not from the dataset you check: a spec copied from the
 dataset agrees with it by construction.
 
-The `variables_file` maps each variable to the keys expected in its `variables_metadata` entry,
-looked up at the top level and then in `mars`:
+Each key of a variable other than `min`, `max`, `units`, `allow_nans` and `constant` is expected in
+its `variables_metadata` entry, looked up at the top level and then in `mars`; `units` is compared
+too. A variable without such keys is not checked.
 
-```yaml
-T_850: {param: T, levtype: pl, levelist: 850}
-```
+`allow_nans` is the set of variables with `allow_nans: true` (with a `variables` mapping) or the
+spec's `allow_nans`: `true`, `false` or a list. anemoi writes a list of variables or a bool; a list
+is compared as a set (one ERROR per variable allowed by only one side), `false` is the empty list,
+and a list against `true` is an ERROR.
 
 ## The reference: meta files and `compare`
 
 A meta file (`meta-bee dump`, YAML or JSON by extension, about 30 kB) holds the whole `.zattrs` and,
 for every array, its shape, dtype, a sha256 of its values and a short summary. `data` gets only its
-shape and dtype. Commit it next to the spec once a version is accepted. A rebuild is then compared
-with it without needing access to the published dataset. A zarr can be given instead of a meta file
-anywhere: it is fingerprinted on the fly.
+shape and dtype. Commit it next to the spec once a version is accepted, usually as the `meta` section of the ref
+file that `hive dump` writes (with stats-bee's stats file in its `stats` section). A rebuild is then
+compared with it without needing access to the published dataset. A ref file or a zarr can be given
+instead of a meta file anywhere: a zarr is fingerprinted on the fly.
 
 The comparison walks both on dotted paths (`variables_metadata.T_850.mars.levelist`,
 `arrays.latitudes.values`). Every item is `identical`, `differs`, `added` (only in the dataset),
@@ -94,8 +99,8 @@ ones, which also shows the paths to use in the policy). It exits 1 when a differ
 
 ## In CI
 
-With `reference_meta` in the spec, `hive --strict` (or `meta-bee check`) runs the reference comparison
+With `reference` in the spec, `hive --strict` (or `meta-bee check`) runs the reference comparison
 as the `matches_reference` check, so a release needs no separate `compare` step. When a change is
-intended (a new variable, a new period), review `meta-bee compare new.zarr checks/data.meta.yaml`,
-then dump the new meta file and commit it with the spec change. See [ci.md](ci.md) for the whole
+intended (a new variable, a new period), review `meta-bee compare new.zarr checks/data.ref.yaml`,
+then dump the new ref file (`hive dump`) and commit it with the spec change. See [ci.md](ci.md) for the whole
 workflow and an example CSCS-CI job.

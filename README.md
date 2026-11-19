@@ -19,17 +19,18 @@ All of them share the same core, the `honeycomb`:
 - seeded sampling
 - the `Source` interface
 
-> Status: all three bees are implemented. spot-bee ships a generic grib-index source
-> (`GribIndexSource`, `grib` extra). Derived variables, computed forcings and constant fields are
+> Status: all three bees are implemented. spot-bee ships two GRIB sources: anemoi grib-index
+> databases (`GribIndexSource`, `grib` extra) and FDB (`FdbSource`, `fdb` extra). Derived variables, computed forcings and constant fields are
 > reported as not comparable, see [docs/spot-bee.md](docs/spot-bee.md#derived-variables-and-forcings).
 
 ## Usage
 
 ```bash
-uv sync                                                # add --extra grib for spot-bee's GRIB source
+uv sync                                                # add --extra grib or --extra fdb for spot-bee's sources
 uv run hive <dataset.zarr> --spec <spec.yaml>          # all bees
 uv run meta-bee check <dataset.zarr> --spec <spec.yaml>   # one bee
 uv run hive --list                                     # available checks
+uv run hive dump <dataset.zarr> --spec <spec.yaml> -o data.ref.yaml   # ref file: meta + stats reference
 uv run meta-bee dump <dataset.zarr> -o meta.yaml       # meta file (metadata + structure)
 uv run meta-bee compare <dataset.zarr> meta.yaml       # metadata: what is identical, what differs
 uv run stats-bee dump <dataset.zarr> --spec <spec.yaml> -o stats.yaml   # stats file
@@ -45,7 +46,7 @@ Exit codes:
 |---|---|
 | 0 | no finding reaches `--fail-on` (default `error`); with `--strict`, also no check was skipped |
 | 1 | the dataset failed the checks (a crash inside one check counts here, as an ERROR finding) |
-| 2 | usage or configuration error: missing dataset, invalid spec or ranges file, unknown `--select` name |
+| 2 | usage or configuration error: missing dataset, invalid spec, unknown `--select` name |
 | 3 | internal error of the tool |
 
 ## Release CI
@@ -90,25 +91,25 @@ The hive is generic. Everything dataset-specific lives in the **dataset's own re
 
 ## Setting up a dataset
 
-The spec is written by hand, once per dataset, and every bee reads the same file. Only the
-reference stats file is generated.
+A dataset needs two files: the spec, written by hand once, which every bee reads, and the ref
+file, generated from the accepted version by `hive dump`.
 
-1. **Copy the templates** into the dataset repo:
+1. **Copy the template** into the dataset repo:
 
    ```bash
-   cp templates/spec.example.yaml            <dataset-repo>/checks/<dataset>.yaml
-   cp templates/physical_ranges.example.yaml <dataset-repo>/checks/physical_ranges.yaml
-   cp templates/variables.example.yaml       <dataset-repo>/checks/variables.yaml
+   cp templates/spec.example.yaml <dataset-repo>/checks/<dataset>.yaml
    ```
 
-2. **Fill in the expected structure** (`variables`, `start_date`, `end_date`, `frequency`,
-   `grid_points`, `resolution`, `bbox`, `allow_nans`, `missing_dates`, `constant_fields`, and the
-   per-variable mars keys in the variables file) from the anemoi **recipe**, not from the dataset you are
-   about to check. A spec copied from the dataset agrees with it by construction and catches
-   nothing in that build.
+2. **Fill in the expected structure** (`start_date`, `end_date`, `frequency`, `grid_points`,
+   `resolution`, `bbox`, `missing_dates`) and the `variables` with what is expected of each: the
+   variables_metadata keys (`param`, `levtype`, `levelist`, `process`, ...), `constant: true`,
+   `allow_nans: true`. Take them from the anemoi **recipe**, not from the dataset you are about to
+   check. A spec copied from the dataset agrees with it by construction and catches nothing in
+   that build.
 
-3. **Write the ranges file.** Keep the bounds loose: they should catch unit errors and garbage,
-   not unusual weather. Variables without a range are listed as INFO.
+3. **Add the physical ranges** (`min`, `max`, `units`) to the variables. Keep the bounds loose:
+   they should catch unit errors and garbage, not unusual weather. Variables without a range are
+   listed as INFO. YAML anchors share a range between variables, e.g. the levels of one field.
 
 4. **Choose the sampling.** `n_dates` random dates over the whole time range, `n_points` grid
    points on each of them for mean and stdev (10k–100k, or `all`; min/max and NaN/inf always cover
@@ -128,19 +129,18 @@ reference stats file is generated.
    and accepted it, e.g. `statistics_consistent` on insolation, whose diurnal cycle a small
    sample can't resolve.
 
-6. **Write the reference meta and stats files** once this version of the dataset is accepted:
+6. **Write the ref file** once this version of the dataset is accepted:
 
    ```bash
-   uv run meta-bee dump data.zarr -o checks/<dataset>.meta.yaml
-   uv run stats-bee dump data.zarr --spec checks/<dataset>.yaml -o checks/<dataset>.stats.yaml
+   uv run hive dump data.zarr --spec checks/<dataset>.yaml -o checks/<dataset>.ref.yaml
    ```
 
-   Uncomment `reference_meta: <dataset>.meta.yaml` and `reference_stats: <dataset>.stats.yaml` in the
-   spec, and commit the spec, the ranges and variables files, and the meta and stats files.
+   Set `reference: <dataset>.ref.yaml` in the spec, and commit the spec and the ref file.
 
 7. **Gate releases in CI** with `--strict`, see [Release CI](#release-ci). Each rebuild is then
-   compared with the accepted version. See [docs/meta-bee.md](docs/meta-bee.md) for the meta file
-   and [docs/stats-bee.md](docs/stats-bee.md#stats-files) for the stats file.
+   compared with the accepted version. The ref file holds the meta file of meta-bee and the stats
+   file of stats-bee, see [docs/meta-bee.md](docs/meta-bee.md) and
+   [docs/stats-bee.md](docs/stats-bee.md#stats-files).
 
 ### Spec fields
 
@@ -151,16 +151,18 @@ paths resolve against the spec file's directory.
 | field | used by | meaning |
 |---|---|---|
 | `name` | none | for humans |
-| `variables` | meta-bee | exact set of variables |
+| `variables` | all bees | exact set of variables (meta-bee): a list, or a mapping `{name: {...}}` with the per-variable fields below |
+| `variables.<name>.min`, `.max`, `.units` | stats-bee, meta-bee | physical range (`physical_ranges`); units, compared with variables_metadata |
+| `variables.<name>.allow_nans` | meta-bee, stats-bee | `true`: NaNs allowed in this variable (default `false`) |
+| `variables.<name>.constant` | stats-bee | `true`: never changes in time (used when the dataset lists no `constant_fields`) |
+| `variables.<name>.<key>` | meta-bee | any other key (`param`, `levtype`, `levelist`, `process`, ...): expected in `variables_metadata.<name>`, at its top or in `mars` |
+| `anchors` | none | a place for YAML anchors shared by several variables |
 | `start_date`, `end_date`, `frequency` | meta-bee | expected first and last date, and step |
 | `grid_points`, `resolution`, `bbox` | meta-bee | expected grid size, `resolution` attribute, extent `{lat_min, lat_max, lon_min, lon_max, tolerance}` |
-| `allow_nans`, `missing_dates` | meta-bee | expected flags |
-| `variables_file` | meta-bee | YAML of `{variable: {param, levtype, levelist, ...}}`, see `templates/variables.example.yaml` |
-| `reference_meta` | meta-bee | meta file (`meta-bee dump`) or zarr of the accepted version |
+| `allow_nans` | meta-bee, stats-bee | `true`, `false` or a list of variables; with a `variables` mapping, set it per variable instead |
+| `missing_dates` | meta-bee | expected `missing_dates` |
+| `reference` | meta-bee, stats-bee | ref file (`hive dump`) of the accepted version; a meta file, a stats file or a zarr (meta-bee only) work too |
 | `reference_policy` | meta-bee | `{ignore, error, warning, info: [path globs]}`: severity of differences to the reference |
-| `constant_fields` | stats-bee | fields that must not change in time (used when the dataset lists none) |
-| `ranges_file` | stats-bee, meta-bee | YAML of `{variable: {min, max, units}}`, see `templates/physical_ranges.example.yaml`; meta-bee checks the units |
-| `reference_stats` | stats-bee | stats file of the accepted version, written by `stats-bee dump` |
 | `calibrated_tolerances` | stats-bee | tolerance file for `statistics_consistent`, written by `stats-bee calibrate` |
 | `sampling` | stats-bee, spot-bee | `seed`, `n_dates` and `n_points` (int or `all`), `include_dates`; the same dates x points for both bees |
 | `tolerances` | stats-bee, spot-bee | `statistics_rtol`, `z_threshold`, `compare_atol_stdev` (stats-bee); `source_rtol`, `source_atol`, `source_per_variable: {VAR: {rtol, atol}}` (spot-bee) |

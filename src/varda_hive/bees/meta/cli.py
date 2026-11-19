@@ -6,8 +6,10 @@
 """meta-bee's extra subcommands: `meta-bee dump` writes a meta file, `meta-bee compare` compares two
 datasets or meta files. `meta-bee check` is the generic one, see varda_hive/cli.py."""
 from argparse import ArgumentParser, Namespace
+from pathlib import Path
+from typing import Any
 
-from ...honeycomb import Dataset, Report, Severity, load_spec
+from ...honeycomb import Dataset, Report, Severity, Spec, load_spec
 from ...honeycomb.report import to_json, to_markdown
 from .metafile import (IDENTICAL, IGNORED, MetaComparison, compare_meta, fingerprint, load_reference, save_meta,
                        shorten)
@@ -17,7 +19,9 @@ def _add_dump_args(p: ArgumentParser) -> None:
     p.description = ("Write the meta file of an anemoi dataset: its attributes, and the shape, dtype and a hash "
                      "of every array. Commit it next to the spec as the reference of the accepted version.")
     p.epilog = """examples:
-  meta-bee dump data.zarr -o checks/data.meta.yaml      # then set `reference_meta: data.meta.yaml` in the spec
+  meta-bee dump data.zarr -o checks/data.meta.yaml      # then set `reference: data.meta.yaml` in the spec
+
+`hive dump` writes the meta and stats references into one ref file.
 
 See docs/meta-bee.md."""
     p.add_argument("dataset", help="path to the anemoi zarr dataset")
@@ -25,6 +29,11 @@ See docs/meta-bee.md."""
                    "--output",
                    default="-",
                    help="output file, YAML for .yaml/.yml, otherwise JSON (default: JSON to stdout)")
+
+
+def dump_section(dataset: Dataset, spec: Spec, dates_from: Path | None) -> dict[str, Any]:  # pylint: disable=unused-argument
+    """meta-bee's section of a ref file (`hive dump`): the meta file."""
+    return fingerprint(dataset)
 
 
 def _dump(args: Namespace) -> int:
@@ -37,14 +46,15 @@ def _add_compare_args(p: ArgumentParser) -> None:
                      "identical and what differs. Each can be a zarr dataset or a meta file.")
     p.epilog = """examples:
   meta-bee compare new.zarr checks/data.meta.yaml
+  meta-bee compare new.zarr checks/data.ref.yaml        # the meta section of a ref file (`hive dump`)
   meta-bee compare new.zarr published.zarr --all
   meta-bee compare new.zarr checks/data.meta.yaml --spec checks/data.yaml --format markdown
 
 Differences are ERROR (structure: variables, shapes, dates, grid), WARNING (other metadata) or INFO,
 and churn (uuid, timestamps, provenance, recipe) is ignored; the spec's `reference_policy` overrides
 this. Exit code 1 if a difference reaches --fail-on. See docs/meta-bee.md."""
-    p.add_argument("dataset", help="dataset (zarr) or meta file to check")
-    p.add_argument("reference", help="reference dataset (zarr) or meta file")
+    p.add_argument("dataset", help="dataset (zarr), meta file or ref file to check")
+    p.add_argument("reference", help="reference dataset (zarr), meta file or ref file")
     p.add_argument("--spec", help="dataset spec YAML (reference_policy)")
     p.add_argument("--format", choices=("text", "json", "markdown"), default="text")
     p.add_argument("--fail-on", choices=("error", "warning"), default="error")

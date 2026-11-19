@@ -12,8 +12,8 @@ variable the source cannot reproduce one-to-one (a derived or accumulated
 field, a computed forcing). An optional `bind(dataset)` is called once before
 the first fetch, so a source can read the dataset's variables_metadata.
 
-The spec names the plug-in by import path, see templates/source_plugin_example.py
-and varda_hive.sources.grib_index. A plug-in whose __init__ takes `base_dir`
+The spec names the plug-in by import path, see templates/source_plugin_example.py,
+varda_hive.sources.grib_index and varda_hive.sources.fdb. A plug-in whose __init__ takes `base_dir`
 gets the spec's directory, to resolve relative paths in its args.
 """
 import importlib

@@ -15,7 +15,7 @@ import math
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 import yaml
 
 from .dataset import parse_frequency
@@ -76,18 +76,10 @@ class SourceSpec(_Strict):
 
 
 class PhysicalRange(_Strict):
-    """One entry of a `ranges_file`."""
+    """The physical range of a variable, from its `min`/`max` in the spec."""
     min: float = -math.inf
     max: float = math.inf
     units: str = ""
-
-
-def load_ranges(path: Path) -> dict[str, PhysicalRange]:
-    """Read and validate a `ranges_file`: {variable: {min, max, units}}, unknown keys rejected."""
-    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
-    if not isinstance(raw, dict):
-        raise ValueError(f"{path}: expected a mapping of variable -> {{min, max, units}}")
-    return {str(name): PhysicalRange(**(bounds or {})) for name, bounds in raw.items()}
 
 
 class BBox(_Strict):
@@ -113,44 +105,55 @@ class ReferencePolicy(_Strict):
 Scalar = str | int | float | bool | None
 
 
-def load_variables_file(path: Path) -> dict[str, dict[str, Scalar]]:
-    """Read and validate a `variables_file`: {variable: {key: value}}, e.g. {T_850: {param: T,
-    levtype: pl, levelist: 850}}. Keys are free (they follow the dataset's variables_metadata), values
-    must be scalars."""
-    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
-    if not isinstance(raw, dict):
-        raise ValueError(f"{path}: expected a mapping of variable -> {{key: value}}")
-    out: dict[str, dict[str, Scalar]] = {}
-    for name, entry in raw.items():
-        entry = entry or {}
-        if not isinstance(entry, dict) or any(isinstance(v, (dict, list)) for v in entry.values()):
-            raise ValueError(f"{path}: {name}: expected a mapping of key -> scalar value")
-        out[str(name)] = {str(k): v for k, v in entry.items()}
-    return out
+class VariableSpec(BaseModel):
+    """One entry of the spec's `variables` mapping. The typed keys are the hive's own; any other key
+    (param, levtype, levelist, process, constant_in_time, ...) is expected in the dataset's
+    `variables_metadata.<variable>`, at its top level or in its `mars` section."""
+    model_config = ConfigDict(extra="allow")
+    # Physical range (stats-bee physical_ranges) and units (meta-bee variables_metadata_match_spec).
+    min: float | None = None
+    max: float | None = None
+    units: str | None = None
+    # NaNs are allowed in this variable (the dataset's `allow_nans` lists it).
+    allow_nans: bool = False
+    # The variable never changes in time (the dataset's `constant_fields` lists it).
+    constant: bool = False
+
+    @model_validator(mode="after")
+    def _valid(self) -> "VariableSpec":
+        for key, value in (self.model_extra or {}).items():
+            if isinstance(value, (dict, list)):
+                raise ValueError(f"`{key}`: expected a scalar value, got {value!r}")
+        if self.min is not None and self.max is not None and self.min > self.max:
+            raise ValueError(f"min {self.min} > max {self.max}")
+        return self
+
+    @property
+    def metadata(self) -> dict[str, Scalar]:
+        """The keys expected in the dataset's variables_metadata entry."""
+        return dict(self.model_extra or {})
 
 
-class Spec(_Strict):
+class Spec(_Strict):  # pylint: disable=too-many-instance-attributes
     name: str | None = None
-    variables: list[str] | None = None
+    # A list of names, or a mapping {name: VariableSpec or null} with per-variable expectations.
+    variables: list[str] | dict[str, VariableSpec] | None = None
     start_date: datetime | None = None
     end_date: datetime | None = None
     frequency: str | None = None
     grid_points: int | None = None
     resolution: str | None = None
     bbox: BBox | None = None
-    allow_nans: bool | None = None
+    # true/false, or the variables that may contain NaNs (as anemoi writes it). With a `variables`
+    # mapping, leave it out and set `allow_nans: true` on the variables instead.
+    allow_nans: bool | list[str] | None = None
     # Expected `missing_dates` attribute, usually [].
     missing_dates: list[datetime] | None = None
-    # Expected per-variable metadata (mars param, levtype, levelist, ...), see load_variables_file.
-    variables_file: Path | None = None
-    constant_fields: list[str] | None = None
-    ranges_file: Path | None = None
-    # Stats file (written by `stats-bee dump`) to compare against, e.g. committed in the dataset repo.
-    reference_stats: Path | None = None
     # Tolerance file (written by `stats-bee calibrate`) for statistics_consistent.
     calibrated_tolerances: Path | None = None
-    # meta-bee: reference to compare the structure with, a meta file (`meta-bee dump`) or a zarr.
-    reference_meta: Path | None = None
+    # Reference to compare with: a ref file (`hive dump`, meta and stats sections), a meta file
+    # (`meta-bee dump`), a stats file (`stats-bee dump`) or a zarr (meta-bee only).
+    reference: Path | None = None
     reference_policy: ReferencePolicy = Field(default_factory=ReferencePolicy)
     sampling: Sampling = Field(default_factory=Sampling)
     tolerances: Tolerances = Field(default_factory=Tolerances)
@@ -158,6 +161,9 @@ class Spec(_Strict):
     # Known, accepted warnings, demoted to INFO: {check name: [variables]}, "*" for all variables.
     # E.g. {statistics_consistent: [insolation]} for a diurnal field the sample cannot resolve.
     ignore_warnings: dict[str, list[str]] = Field(default_factory=dict)
+    # Not read by the hive: a place for YAML anchors shared by several variables, e.g.
+    # `anchors: {wind: &wind {min: -80, max: 80, units: m s-1}}`, then `U_10M: *wind`.
+    anchors: Any = None
     # Directory of the spec file; relative paths in the spec resolve against it.
     base_dir: Path = Field(default_factory=Path.cwd, exclude=True)
 
@@ -168,27 +174,87 @@ class Spec(_Strict):
             parse_frequency(value)  # ValueError -> ValidationError
         return value
 
+    @field_validator("variables", mode="before")
+    @classmethod
+    def _empty_entries(cls, value: Any) -> Any:
+        # `T_2M:` with nothing after it is an entry without expectations.
+        if isinstance(value, dict):
+            return {name: {} if entry is None else entry for name, entry in value.items()}
+        return value
+
+    @model_validator(mode="after")
+    def _consistent(self) -> "Spec":
+        entries = self._entries()
+        if self.allow_nans is not None and any(e.allow_nans for e in entries.values()):
+            raise ValueError("`allow_nans` is set both for the spec and for variables: use one of them")
+        names = self.variable_names()
+        if isinstance(self.allow_nans, list) and names is not None:
+            unknown = sorted(set(self.allow_nans) - set(names))
+            if unknown:
+                raise ValueError(f"`allow_nans` lists variables not in `variables`: {unknown}")
+        return self
+
+    # --- per-variable views, the same for a list and a mapping of variables ---
+
+    def _entries(self) -> dict[str, VariableSpec]:
+        return self.variables if isinstance(self.variables, dict) else {}
+
+    def variable_names(self) -> list[str] | None:
+        """The expected variables, None if the spec lists none."""
+        return None if self.variables is None else list(self.variables)
+
+    def ranges(self) -> dict[str, PhysicalRange]:
+        """Physical ranges of the variables with a `min` or `max`."""
+        return {
+            name:
+            PhysicalRange(min=-math.inf if e.min is None else e.min,
+                          max=math.inf if e.max is None else e.max,
+                          units=e.units or "")
+            for name, e in self._entries().items() if e.min is not None or e.max is not None
+        }
+
+    def units(self) -> dict[str, str]:
+        """Expected units of the variables that give them."""
+        return {name: e.units for name, e in self._entries().items() if e.units}
+
+    def expected_metadata(self) -> dict[str, dict[str, Scalar]]:
+        """Expected variables_metadata keys of the variables that give any."""
+        return {name: e.metadata for name, e in self._entries().items() if e.metadata}
+
+    def constant_field_names(self) -> list[str] | None:
+        """The variables marked `constant`, None without a `variables` mapping."""
+        if not isinstance(self.variables, dict):
+            return None
+        return [name for name, e in self.variables.items() if e.constant]
+
+    def nan_variables(self) -> bool | set[str] | None:
+        """Where NaNs are allowed: everywhere (True), nowhere (False), in a set of variables, or None
+        if the spec doesn't say. A `variables` mapping always says: the variables with `allow_nans`."""
+        if isinstance(self.allow_nans, list):
+            return set(self.allow_nans)
+        if self.allow_nans is not None:
+            return self.allow_nans
+        if isinstance(self.variables, dict):
+            return {name for name, e in self.variables.items() if e.allow_nans}
+        return None
+
 
 def load_spec(path: str | Path | None) -> Spec:
-    """Load and validate a spec. Files it names must exist, and the ranges file must be valid, so a
-    misconfigured spec fails here (CLI exit code 2) instead of in every check."""
+    """Load and validate a spec. Files it names must exist, so a misconfigured spec fails here (CLI
+    exit code 2) instead of in every check."""
     if path is None:
         return Spec()
     path = Path(path)
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     spec = Spec(**raw, base_dir=path.resolve().parent)
-    for key in ("ranges_file", "reference_stats", "calibrated_tolerances", "variables_file", "reference_meta"):
+    for key in ("reference", "calibrated_tolerances"):
         value = getattr(spec, key)
         if value is None:
             continue
         if not value.is_absolute():
             value = spec.base_dir / value
             setattr(spec, key, value)
-        # reference_meta may be a zarr directory
-        if not (value.exists() if key == "reference_meta" else value.is_file()):
+        # the reference may be a zarr directory
+        if not (value.exists() if key == "reference" else value.is_file()):
             raise FileNotFoundError(f"{path}: {key} not found: {value}")
-    if spec.ranges_file is not None:
-        load_ranges(spec.ranges_file)
-    if spec.variables_file is not None:
-        load_variables_file(spec.variables_file)
     return spec

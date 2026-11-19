@@ -54,7 +54,7 @@ spot-bee uses the spec's `sampling`, the same as stats-bee:
 - **Points:** `n_points` grid points, the same on every date, or `all`.
 
 Both bees therefore check the same cells (one definition: `honeycomb/sampling.py:sampled_dates`).
-With `reference_stats` in the spec, stats-bee samples the reference's dates instead, while spot-bee
+With a `reference` in the spec, stats-bee samples the reference's dates instead, while spot-bee
 keeps the spec's. They are the same dates as long as the reference was dumped with the same
 `sampling` from a dataset of the same length; spot-bee does not read stats files, to stay
 independent of stats-bee. Reading the source is usually the cost: one GRIB message
@@ -96,14 +96,17 @@ numeric fails that variable. An exception from the constructor or from `bind` st
 ("check crashed"), so a plug-in should keep per-variable configuration errors for `fetch`, as
 `GribIndexSource` does.
 
-Two plug-ins ship with the hive:
+Three plug-ins ship with the hive:
 
 - `varda_hive.sources.grib_index:GribIndexSource`: GRIB files through anemoi `grib-index`
   databases, see below.
+- `varda_hive.sources.fdb:FdbSource`: GRIB fields from an FDB, see [FdbSource](#fdbsource).
 - `templates/source_plugin_example.py:ZarrSource`: another anemoi zarr, e.g. a trusted copy.
 
-A dataset with another kind of source (FDB/polytope, a different archive) can bring its own plug-in
-in its repo.
+A dataset with another kind of source (polytope, a different archive) can bring its own plug-in
+in its repo. Both GRIB sources decode and validate messages the same way
+(`src/varda_hive/sources/_grib.py`): the number of grid points, the grid check below, and missing
+points from the bitmap as NaN.
 
 ### GribIndexSource
 
@@ -193,6 +196,61 @@ Unstructured grids (ICON: no coordinates in the GRIB) and rotated grids are not 
 **eccodes** is imported when the source is bound: without it the check fails once, with the install
 hint.
 
+### FdbSource
+
+`FdbSource` retrieves one GRIB field per (variable, date) from an FDB with pyfdb and decodes it with
+eccodes, so it needs the `fdb` extra and the FDB library, e.g. from the FDB uenv. Its args follow
+the anemoi `fdb` source of the recipe, so they can be copied from it:
+
+```yaml
+source:
+  plugin: varda_hive.sources.fdb:FdbSource
+  args:
+    fdb_config: null             # dict as in the recipe; null: pyfdb's default (FDB5_CONFIG_FILE)
+    fdb_userconfig: null
+    request: {class: rd, stream: reanl, expver: r001, model: icon-rea-l-ch1, type: cf}
+    offset_from_date: true       # date=YYYYMMDD, time=0000, step=offset from midnight
+    step_zero_from_previous_date: [VMAX_10M]   # step 0 -> previous date, step 24 (true: all variables)
+    variables:                   # overrides, merged on top of the default request
+      VMAX_10M: {}               # `process: maximum`, but the raw GRIB field: compare it
+      CLCL: {request: {levtype: pl, levelist: 800}}   # requested as pl, mapped to sfc by a flavour
+      CLCM: {request: {levtype: pl, levelist: 400}}
+      CLCH: {request: {levtype: pl, levelist: 0}}
+    skip: {CIN_MU: masked below -999 by apply_mask_fields}
+    members: [1, 2]              # GRIB `number` of each dataset member, default 0, 1, ... (none for one member)
+    check_grid: true
+```
+
+The request of a variable is `request`, plus from its `variables_metadata`: `param` = `grib.paramId`
+(FDB indexes paramIds, as the recipe's `param_id_map`), else `mars.param`; `levtype` = `mars.levtype`;
+`levelist` = `mars.levelist` unless null. Then the time keys, as the anemoi source computes them:
+with `offset_from_date`, `date` of the valid time, `time=0000` and the step since midnight, spelled
+as FDB indexes it (`0`, `10m`, `6`, `23h30m`); without it, `time=HHMM`. An override's `request` is
+merged on top, and its `scale` and `offset` apply to the values (value * scale + offset).
+
+Not comparable, unless the variable has an override: `skip`, computed forcings, derived fields
+(`process`), constant fields, no mars metadata (the same rules as GribIndexSource), and
+`levtype: unknown`, e.g. a field interpolated from model to pressure levels. An override, even an
+empty one, makes the variable comparable, e.g. a `process: maximum` that is the raw GRIB field.
+
+No data for a request is `None` (reported as missing); several messages for one request are an ERROR
+of the variable. Values are in message order, which is the dataset order for an ICON grid read
+with `grid_definition: icon`; the grid check is that of GribIndexSource.
+
+**Environment.** Run it as the build ran, e.g. in the FDB uenv with the dataset repo's eccodes
+definitions, and `FDB5_CONFIG_FILE` pointing at the FDB root the dataset was built from:
+
+```bash
+uenv run --view fdb:rea-l-ch1 fdb/5.21:v2 -- bash -c '
+  export ECCODES_DEFINITION_PATH=$(realpath .venv/share/eccodes-cosmo-resources/definitions)
+  uv run --with "varda-dataset-checker-hive[fdb] @ git+https://github.com/MeteoSwiss/varda-dataset-checker-hive@<ref>" \
+    hive data.zarr --spec checks/<dataset>.yaml --strict'
+```
+
+In that uenv, importing pyfdb before eccodes crashes the interpreter; `FdbSource` imports eccodes
+first. `tests/test_fdb_realch1.py` (`pytest -m fdb`) runs spot-bee on the REA-L-CH1 10 min CI
+dataset against the FDB.
+
 ## Derived variables and forcings
 
 Some dataset variables are not a GRIB field. spot-bee reports them as "not comparable" (INFO), not
@@ -216,7 +274,8 @@ Options for later:
 - **Calling the upstream forcing implementation:** earthkit as an optional dependency, instead of a copy.
 - **One source for build and check:** the same source code used to build the dataset and to check it, so the mapping lives in one place.
 - **Batched or point requests:** an optional `prefetch(date, variables)` or a `points` argument in the
-  source contract, for FDB/polytope sources where one request per field is slow.
+  source contract, for FDB/polytope sources where one request per field is slow (`FdbSource` makes
+  one retrieve per variable and date).
 - **A small dataset view for `bind`:** variables, metadata, dates, members, grid size and lat/lon,
   instead of the internal `Dataset`.
 - **Source errors at spec load:** build the plug-in when the spec is loaded, so a wrong plug-in or

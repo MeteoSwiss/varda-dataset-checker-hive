@@ -6,6 +6,7 @@
 """Each template check passes on a clean dataset and fires on a broken one."""
 import json
 from pathlib import Path
+import warnings
 
 import numpy as np
 import pytest
@@ -310,8 +311,9 @@ def test_stats_statistics_consistent_exact(dataset_path):
 
 
 def test_stats_spike_outside_the_point_subset(dataset_path, write_spec):
-    write_spec("T_2M: {min: 200.0, max: 330.0, units: K}\n", name="ranges.yaml")
-    spec = load_spec(write_spec("ranges_file: ranges.yaml\nsampling: {n_dates: 1, n_points: 5, include_dates: [6]}\n"))
+    spec = load_spec(
+        write_spec("variables: {T_2M: {min: 200.0, max: 330.0, units: K}}\n"
+                   "sampling: {n_dates: 1, n_points: 5, include_dates: [6]}\n"))
     outside = int(np.setdiff1d(np.arange(NG), sample_points(NG, spec.sampling))[0])
     data = zarr.open_group(str(dataset_path), mode="r+")["data"]
     data[6, 1, 0, outside] = 400.0
@@ -324,8 +326,9 @@ def test_stats_spike_outside_the_point_subset(dataset_path, write_spec):
 
 
 def test_stats_physical_ranges(dataset_path, write_spec):
-    write_spec("T_2M: {min: 200.0, max: 330.0, units: K}\n", name="ranges.yaml")
-    spec = load_spec(write_spec("ranges_file: ranges.yaml\nsampling: {n_dates: 1, include_dates: [6]}\n"))
+    spec = load_spec(
+        write_spec("variables: {T_2M: {min: 200.0, max: 330.0, units: K}, U_10M: {units: m s-1}}\n"
+                   "sampling: {n_dates: 1, include_dates: [6]}\n"))
     assert _stats_findings(dataset_path, spec, "physical_ranges") == []
     zarr.open_group(str(dataset_path), mode="r+")["data"][6, 1, 0, 0] = 400.0
     [f] = _stats_findings(dataset_path, spec, "physical_ranges")
@@ -363,7 +366,112 @@ def test_stats_constant_field_not_listed(dataset_path):
 
 def test_stats_matches_reference_stats(dataset_path, tmp_path, write_spec):
     save_stats(compute_stats(Dataset(dataset_path), Spec(sampling={"n_dates": 3})), tmp_path / "ref.json")
-    spec = load_spec(write_spec("reference_stats: ref.json\nsampling: {n_dates: 1, seed: 7}\n"))
+    spec = load_spec(write_spec("reference: ref.json\nsampling: {n_dates: 1, seed: 7}\n"))
     assert _stats_findings(dataset_path, spec, "matches_reference_stats") == []
     zarr.open_group(str(dataset_path), mode="r+")["data"][:, 3] *= 2
     assert {f.variable for f in _stats_findings(dataset_path, spec, "matches_reference_stats")} == {"U_10M"}
+
+
+# --- allow_nans as a list of variables ----------------------------------------------------------
+
+
+def _with_nans(path: Path, nans: dict[str, slice | int], allow_nans) -> None:
+    """Put NaNs into variables {name: time indices}, store nan-aware statistics as anemoi does, and set
+    the dataset's `allow_nans`."""
+    root = zarr.open_group(str(path), mode="r+")
+    data = root["data"][:]
+    for name, t in nans.items():
+        if isinstance(t, slice):
+            data[t, VARIABLES.index(name)] = np.nan
+        else:
+            data[t, VARIABLES.index(name), 0, ::3] = np.nan
+    root["data"][:] = data
+    v = data.astype("f8")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # an all-NaN variable: NaN statistics
+        root["mean"][:] = np.nanmean(v, axis=(0, 2, 3))
+        root["stdev"][:] = np.nanstd(v, axis=(0, 2, 3))
+        root["minimum"][:] = np.nanmin(v, axis=(0, 2, 3))
+        root["maximum"][:] = np.nanmax(v, axis=(0, 2, 3))
+    attrs = json.loads((path / ".zattrs").read_text())
+    (path / ".zattrs").write_text(json.dumps(attrs | {"allow_nans": allow_nans}))
+
+
+NAN_SPEC = "sampling: {n_dates: all, n_points: all}\n"
+
+
+def test_stats_nans_allowed_in_listed_variables(dataset_path, write_spec):
+    _with_nans(dataset_path, {"T_2M": 3}, ["T_2M"])
+    spec = load_spec(write_spec(NAN_SPEC + "allow_nans: [T_2M]\n"))
+    assert _errors(dataset_path, "stats", spec) == []
+    assert _errors(dataset_path, "meta", spec) == []
+    infos = [
+        f for f in run(CheckContext(Dataset(dataset_path), spec), bees=["stats"]).findings if f.check == "finite_values"
+    ]
+    assert [f.message for f in infos] == ["NaNs allowed in 1 variables"]
+
+
+def test_stats_nans_in_a_variable_not_listed(dataset_path, write_spec):
+    _with_nans(dataset_path, {"T_2M": 3, "U_10M": 5}, ["T_2M"])
+    spec = load_spec(write_spec(NAN_SPEC + "allow_nans: [T_2M]\n"))
+    assert {(f.check, f.variable, f.time)
+            for f in _errors(dataset_path, "stats", spec)} == {("finite_values", "U_10M", "2020-03-01T05:00:00")}
+    # the dataset's list wins over the spec's: with U_10M listed by the dataset, only meta-bee complains
+    _with_nans(dataset_path, {"T_2M": 3, "U_10M": 5}, ["T_2M", "U_10M"])
+    assert _errors(dataset_path, "stats", spec) == []
+    assert [(f.check, f.variable) for f in _errors(dataset_path, "meta", spec)] == [("flags_match_spec", "U_10M")]
+
+
+def test_stats_nans_allowed_but_variable_all_nan(dataset_path, write_spec):
+    """An allowed variable that is NaN everywhere has NaN stored statistics: an ERROR."""
+    _with_nans(dataset_path, {"T_2M": slice(None)}, ["T_2M"])
+    spec = load_spec(write_spec(NAN_SPEC + "allow_nans: [T_2M]\n"))
+    errors = {(f.check, f.variable, f.message) for f in _errors(dataset_path, "stats", spec)}
+    assert errors == {("statistics_consistent", "T_2M", "stored statistics contain NaN or inf")}
+
+
+def test_stats_nans_allowed_per_variable(dataset_path, write_spec):
+    """In the `variables` mapping, `allow_nans: true` on the variable; the mapping without it means no NaNs."""
+    _with_nans(dataset_path, {"T_2M": 3}, ["T_2M"])
+    entries = "variables: {FIS: {constant: true}, T_2M: {allow_nans: true}, T_850: , U_10M: , V_10M: }\n"
+    spec = load_spec(write_spec(NAN_SPEC + entries))
+    assert _errors(dataset_path, "stats", spec) == []
+    assert _errors(dataset_path, "meta", spec) == []
+    spec = load_spec(write_spec(NAN_SPEC + entries.replace("{allow_nans: true}", "")))
+    assert {(f.check, f.variable) for f in _errors(dataset_path, "meta", spec)} == {("flags_match_spec", "T_2M")}
+    # the dataset's list still decides for stats-bee; with `allow_nans: false` the spec does
+    assert _errors(dataset_path, "stats", spec) == []
+    _with_nans(dataset_path, {"T_2M": 3}, False)
+    assert {f.check for f in _errors(dataset_path, "stats", spec)} == {"finite_values"}
+
+
+def test_stats_nans_not_checked_only_for_true(dataset_path, write_spec):
+    _with_nans(dataset_path, {"U_10M": 5}, True)
+    report = run(CheckContext(Dataset(dataset_path), load_spec(write_spec(NAN_SPEC))), bees=["stats"])
+    assert "NaNs not checked: dataset allows NaNs" in {f.message for f in report.findings}
+    assert not [f for f in report.findings if f.severity == Severity.ERROR]
+    # a list in the spec is used when the dataset says only `true`
+    spec = load_spec(write_spec(NAN_SPEC + "allow_nans: [T_2M]\n"))
+    assert {(f.check, f.variable) for f in _errors(dataset_path, "stats", spec)} == {("finite_values", "U_10M")}
+
+
+@pytest.mark.parametrize("attr, spec, expected", [
+    (["A", "B"], ["B", "A"], set()),
+    ([], False, set()),
+    (False, [], set()),
+    (True, True, set()),
+    (["A", "B"], ["A", "C"], {("B", "not by the spec"), ("C", "not listed in the dataset")}),
+    (["A"], True, {(None, "list the variables")}),
+    (["A"], False, {("A", "not by the spec")}),
+    (True, ["A"], {(None, "the spec expects ['A']")}),
+])
+def test_meta_flags_allow_nans(dataset_path, attr, spec, expected):
+    attrs = json.loads((dataset_path / ".zattrs").read_text())
+    (dataset_path / ".zattrs").write_text(json.dumps(attrs | {"allow_nans": attr}))
+    findings = run(CheckContext(Dataset(dataset_path), Spec(allow_nans=spec)),
+                   bees=["meta"],
+                   select=["flags_match_spec"]).findings
+    errors = [f for f in findings if f.severity == Severity.ERROR]
+    assert len(errors) == len(expected)
+    for variable, text in expected:
+        assert any(f.variable == variable and text in f.message for f in errors), errors

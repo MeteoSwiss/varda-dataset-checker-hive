@@ -142,7 +142,7 @@ def save_meta(meta: dict, path: str | Path | None) -> None:
 
 
 def load_meta(path: str | Path) -> dict:
-    return read_file(path, FORMAT, "meta file", "meta-bee dump")
+    return read_file(path, FORMAT, "meta file", "meta-bee dump", section="meta")
 
 
 def load_reference(path: str | Path) -> dict:

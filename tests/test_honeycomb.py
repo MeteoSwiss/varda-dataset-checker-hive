@@ -13,6 +13,7 @@ from varda_hive.honeycomb import (
     BEES,
     CheckContext,
     Dataset,
+    PhysicalRange,
     Severity,
     Spec,
     checks_for,
@@ -49,18 +50,79 @@ def test_spec_empty_and_strict(write_spec):
 
 
 def test_spec_resolves_relative_paths(write_spec, tmp_path):
-    write_spec("T_2M: {min: 200, max: 330}\n", name="ranges.yaml")
-    spec = load_spec(write_spec("ranges_file: ranges.yaml\nsampling: {n_dates: 2}\n"))
-    assert spec.ranges_file == tmp_path / "ranges.yaml"
+    write_spec("{}", name="ref.yaml")
+    spec = load_spec(write_spec("reference: ref.yaml\nsampling: {n_dates: 2}\n"))
+    assert spec.reference == tmp_path / "ref.yaml"
     assert spec.sampling.n_dates == 2
 
 
 def test_spec_checks_files(write_spec):
-    with pytest.raises(FileNotFoundError, match="reference_stats not found"):
-        load_spec(write_spec("reference_stats: nope.yaml\n"))
-    write_spec("T_2M: {min: 200, mx: 330}\n", name="ranges.yaml")  # typo in the ranges file
-    with pytest.raises(ValidationError):
-        load_spec(write_spec("ranges_file: ranges.yaml\n"))
+    with pytest.raises(FileNotFoundError, match="reference not found"):
+        load_spec(write_spec("reference: nope.yaml\n"))
+    with pytest.raises(FileNotFoundError, match="calibrated_tolerances not found"):
+        load_spec(write_spec("calibrated_tolerances: nope.yaml\n"))
+    for removed in ("ranges_file", "variables_file", "reference_meta", "reference_stats"):
+        with pytest.raises(ValidationError, match="Extra inputs"):
+            load_spec(write_spec(f"{removed}: x.yaml\n"))
+
+
+SINGLE_FILE_SPEC = """
+anchors:
+  wind: &wind {min: -80, max: 80, units: m s-1}
+variables:
+  FIS: {constant: true, param: FIS, constant_in_time: true}
+  T_2M: {min: 200, max: 330, units: K, allow_nans: true, param: T_2M, levtype: sfc}
+  T_850: {param: T, levtype: pl, levelist: 850}
+  U_10M: *wind
+  V_10M: {<<: *wind, param: V_10M}
+  W:
+"""
+
+
+def test_spec_single_file_views(write_spec):
+    """A `variables` mapping with YAML anchors gives the per-variable views the checks use."""
+    spec = load_spec(write_spec(SINGLE_FILE_SPEC))
+    with pytest.raises(ValidationError, match="Extra inputs"):  # an unknown top-level key is still a typo
+        load_spec(write_spec(SINGLE_FILE_SPEC.replace("anchors:", "anchor:")))
+    assert spec.variable_names() == ["FIS", "T_2M", "T_850", "U_10M", "V_10M", "W"]
+    assert spec.ranges() == {
+        "T_2M": PhysicalRange(min=200, max=330, units="K"),
+        "U_10M": PhysicalRange(min=-80, max=80, units="m s-1"),
+        "V_10M": PhysicalRange(min=-80, max=80, units="m s-1"),
+    }
+    assert spec.units() == {"T_2M": "K", "U_10M": "m s-1", "V_10M": "m s-1"}
+    assert spec.expected_metadata() == {
+        "FIS": {
+            "param": "FIS",
+            "constant_in_time": True
+        },
+        "T_2M": {
+            "param": "T_2M",
+            "levtype": "sfc"
+        },
+        "T_850": {
+            "param": "T",
+            "levtype": "pl",
+            "levelist": 850
+        },
+        "V_10M": {
+            "param": "V_10M"
+        },
+    }
+    assert spec.constant_field_names() == ["FIS"]
+    assert spec.nan_variables() == {"T_2M"}
+
+
+def test_spec_allow_nans_forms():
+    assert Spec().nan_variables() is None
+    assert Spec(allow_nans=True).nan_variables() is True
+    assert Spec(allow_nans=["A"]).nan_variables() == {"A"}
+    assert Spec(variables={"A": None, "B": None}).nan_variables() == set()  # a mapping always says
+    assert Spec(variables=["A"]).nan_variables() is None and Spec(variables=["A"]).constant_field_names() is None
+    with pytest.raises(ValidationError, match="both for the spec and for variables"):
+        Spec(allow_nans=False, variables={"A": {"allow_nans": True}})
+    with pytest.raises(ValidationError, match=r"not in `variables`: \['B'\]"):
+        Spec(allow_nans=["B"], variables=["A"])
 
 
 def test_sampling_excludes_indices():

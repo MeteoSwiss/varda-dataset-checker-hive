@@ -1,6 +1,6 @@
 [project]
 name = "varda-dataset-checker-hive"
-version = "0.1.0"
+version = "0.1"
 description = "A hive of slim bees that check anemoi datasets for faults: metadata, statistics and spot-checks against the source."
 license = "BSD-3-Clause"
 readme = "README.md"
@@ -19,6 +19,9 @@ grib = [
     "eccodes>=2.50.0",
     "eccodeslib>=2.50.0.32 ; sys_platform != 'win32'",
 ]
+# No eccodes floor: FDB setups pin their own eccodes (with matching definitions); pyfdb needs the
+# FDB library at run time, e.g. from a uenv.
+fdb = ["pyfdb", "eccodes"]
 
 [project.scripts]
 hive = "varda_hive.cli:hive_main"
@@ -52,8 +55,11 @@ packages = ["src/varda_hive"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-m 'not faulty'"
-markers = ["faulty: runs on the Varda-tiny faulty datasets on /scratch (skipped when missing)"]
+addopts = "-m 'not faulty and not fdb'"
+markers = [
+    "faulty: runs on the Varda-tiny faulty datasets on /scratch (skipped when missing)",
+    "fdb: runs spot-bee against a real FDB (needs pyfdb, the FDB library and HIVE_FDB_DATASET)",
+]
 
 [tool.yapf]
 based_on_style = "pep8"

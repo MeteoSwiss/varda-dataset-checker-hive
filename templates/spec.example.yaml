@@ -6,23 +6,45 @@
 
 name: varda-kenda-ch1-2km-2020-2020-1h-v1.0-pl13-test
 
+# Not read by the hive: YAML anchors shared by several variables below (`*wind`, `<<: *wind`).
+anchors:
+  wind: &wind {min: -80.0, max: 80.0, units: m s-1}
+  temperature: &temperature {min: 200.0, max: 330.0, units: K}
+
+# The exact set of variables (meta-bee), each with what is expected of it. A list of names
+# (`variables: [T_2M, U_10M]`) works too, without the per-variable checks. Per variable:
+#   min, max, units  physical range (stats-bee physical_ranges) and units (meta-bee); keep the bounds
+#                    loose: they catch unit errors and garbage, not unusual weather
+#   allow_nans       true if the variable may contain NaNs (default false), see `allow_nans` below
+#   constant         true if it never changes in time (the dataset's `constant_fields`)
+#   any other key    expected in the dataset's `variables_metadata.<variable>`, at its top level or
+#                    in its `mars` section (param, levtype, levelist, process, constant_in_time, ...);
+#                    write them from the anemoi recipe, not from the dataset you are about to check
+variables:
+  T_2M: {<<: *temperature, param: T_2M, levtype: sfc}
+  T_850: {<<: *temperature, max: 320.0, param: T, levtype: pl, levelist: 850}
+  U_10M: {<<: *wind, param: U_10M, levtype: sfc}
+  V_10M: {<<: *wind, param: V_10M, levtype: sfc}
+  CIN_MU: {min: -2000.0, max: 0.0, units: J kg-1, allow_nans: true, param: CIN_MU, levtype: sfc}
+  FIS: {constant: true, param: FIS, levtype: sfc, constant_in_time: true}
+  cos_latitude: {computed_forcing: true, constant_in_time: true}
+
 # meta-bee: expected structure, from the anemoi recipe (consistency checks need nothing)
-variables: [T_2M, U_10M, V_10M, T_850]       # exact set of variables
 start_date: 2020-03-01T00:00:00
 end_date: 2020-03-30T23:00:00
 frequency: 1h
 grid_points: 30676
 resolution: 2km                              # the `resolution` attribute
 bbox: {lat_min: 45.43, lat_max: 48.19, lon_min: 5.25, lon_max: 11.03, tolerance: 0.01}   # grid extent, degrees
-allow_nans: false
+# With a `variables` mapping, `allow_nans` comes from the variables marked `allow_nans: true`
+# (none: no NaNs). Otherwise give it here: true, false, or a list of variables [CIN_MU, SNOWLMT].
+# allow_nans: false
 missing_dates: []                            # dates the dataset may list as missing
-constant_fields: [FIS, FR_LAND]
-# meta-bee: expected mars param/levtype/levelist per variable, see variables.example.yaml
-variables_file: variables.yaml
-# meta-bee: reference of the accepted version, to compare metadata and structure with. Uncomment
-# once written with `meta-bee dump data.zarr -o <dataset>.meta.yaml`, committed next to this spec
-# (a path to a zarr works too).
-# reference_meta: <dataset>.meta.yaml
+
+# Reference of the accepted version, for meta-bee (metadata and structure) and stats-bee
+# (statistics). Write it with `hive dump data.zarr --spec <this file> -o data.ref.yaml` and commit it
+# next to this spec. A meta file, a stats file or a zarr (meta-bee only) work too.
+reference: data.ref.yaml
 # meta-bee: change the severity of differences to the reference (globs on the dotted path, see
 # `meta-bee compare --all`). Defaults: structure ERROR, other metadata WARNING, churn ignored.
 reference_policy:
@@ -31,11 +53,6 @@ reference_policy:
   warning: []
   info: []
 
-# stats-bee: physical ranges per variable (path relative to this file)
-ranges_file: physical_ranges.yaml
-# stats-bee: stats file of the accepted version to compare against. Uncomment once written with
-# `stats-bee dump data.zarr --spec <this file> -o <dataset>.stats.yaml`, committed next to this spec.
-# reference_stats: <dataset>.stats.yaml
 # stats-bee: calibrated tolerances for statistics_consistent. Uncomment once written with
 # `stats-bee calibrate data.zarr --spec <this file> -o <dataset>.tolerances.yaml`; recalibrate when `sampling` changes.
 # calibrated_tolerances: <dataset>.tolerances.yaml
@@ -62,7 +79,7 @@ ignore_warnings:
 
 # spot-bee: where the original values come from. "file.py:Class" (relative to
 # this file) or "package.module:Class"; `args` are passed to the constructor.
-# Uncomment and adapt, see docs/spot-bee.md (needs the `grib` extra).
+# Uncomment and adapt, see docs/spot-bee.md (GribIndexSource needs the `grib` extra).
 # source:
 #   plugin: varda_hive.sources.grib_index:GribIndexSource
 #   args:
@@ -76,6 +93,16 @@ ignore_warnings:
 #     pl_type_of_level: isobaricInhPa       # typeOfLevel matched for levtype pl
 #     members: [0, 1, 2]                    # GRIB `number` of each ensemble member, default 0, 1, ...
 #     check_grid: true                      # GRIB coordinates vs the dataset's (regular/reduced ll and gg grids)
+# or FDB (the `fdb` extra; FDB5_CONFIG_FILE, ECCODES_DEFINITION_PATH as for the build):
+#   plugin: varda_hive.sources.fdb:FdbSource
+#   args:
+#     fdb_config: null                      # dict as in the recipe; null: FDB5_CONFIG_FILE
+#     request: {class: rd, stream: reanl, expver: r001, model: icon-rea-l-ch1, type: cf}
+#     offset_from_date: true                # date=YYYYMMDD, time=0000, step=offset from midnight
+#     step_zero_from_previous_date: [VMAX_10M]   # step 0 -> previous date, step 24h (or true for all)
+#     variables:                            # overrides of the request from variables_metadata
+#       CLCL: {request: {levtype: pl, levelist: 800}}
+#     skip: {CIN_MU: masked below -999}
 # or another anemoi zarr, e.g. a trusted copy (templates/source_plugin_example.py):
 #   plugin: source_plugin_example.py:ZarrSource
 #   args: {path: /path/to/reference.zarr}

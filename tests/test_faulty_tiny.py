@@ -24,7 +24,17 @@ CLEAN = Path(
     os.environ.get(
         "HIVE_CLEAN_DS", "/scratch/mch/huppd/varda/ich1-analysis-anemoi-dataset/ml_test/datasets/"
         "varda-kenda-ch1-2km-2020-2020-1h-v1.0-pl13-test.zarr"))
-RANGES = Path(__file__).resolve().parents[1] / "templates" / "physical_ranges.example.yaml"
+# Loose physical ranges: they catch unit errors and garbage, not unusual weather.
+RANGES = """\
+variables:
+  T_2M:        {min: 200.0, max: 330.0, units: K}
+  T_850:       {min: 200.0, max: 320.0, units: K}
+  U_10M:       {min: -80.0, max: 80.0, units: m s-1}
+  V_10M:       {min: -80.0, max: 80.0, units: m s-1}
+  PS:          {min: 50000.0, max: 110000.0, units: Pa}
+  TOT_PREC_1H: {min: 0.0, max: 0.3, units: m}
+  CLCT:        {min: 0.0, max: 105.0, units: "%"}   # ICON slightly exceeds 100 (103 on varda-tiny)
+"""
 
 # scenario -> checks expected to report an ERROR
 EXPECTED = {
@@ -68,9 +78,9 @@ pytestmark = [
 @pytest.fixture(scope="module")
 def spec(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("faulty")
-    (tmp / "spec.yaml").write_text(f"ranges_file: {RANGES}\nsampling: {{n_dates: 20, include_dates: [99, 100]}}\n")
+    (tmp / "spec.yaml").write_text(RANGES + "sampling: {n_dates: 20, include_dates: [99, 100]}\n")
     save_stats(compute_stats(Dataset(CLEAN), load_spec(tmp / "spec.yaml")), tmp / "reference.json")
-    (tmp / "spec.yaml").write_text((tmp / "spec.yaml").read_text() + "reference_stats: reference.json\n")
+    (tmp / "spec.yaml").write_text((tmp / "spec.yaml").read_text() + "reference: reference.json\n")
     return load_spec(tmp / "spec.yaml")
 
 
@@ -139,10 +149,12 @@ def meta_spec(tmp_path_factory):
         } if "mars" in m else {})
         for v, m in attrs["variables_metadata"].items()
     }
-    (tmp / "variables.yaml").write_text(yaml.safe_dump(variables))
     save_meta(fingerprint(ds), tmp / "reference.meta.yaml")
     spec = {
-        "variables": attrs["variables"],
+        "variables": {
+            v: variables.get(v, {})
+            for v in attrs["variables"]
+        },
         "start_date": attrs["start_date"],
         "end_date": attrs["end_date"],
         "frequency": attrs["frequency"],
@@ -156,8 +168,7 @@ def meta_spec(tmp_path_factory):
         },
         "allow_nans": attrs["allow_nans"],
         "missing_dates": [],
-        "variables_file": "variables.yaml",
-        "reference_meta": "reference.meta.yaml",
+        "reference": "reference.meta.yaml",
     }
     (tmp / "spec.yaml").write_text(yaml.safe_dump(spec))
     return load_spec(tmp / "spec.yaml")

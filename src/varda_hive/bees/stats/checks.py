@@ -13,14 +13,26 @@ from typing import Any, Generator, Iterator
 
 import numpy as np
 
-from ...honeycomb import CheckContext, Finding, check, error, info, load_ranges, skipped, warning
+from ...honeycomb import CheckContext, Finding, check, error, info, skipped, warning
+from ...honeycomb.dataset import is_zarr
+from ...honeycomb.files import provides
 from .calibrate import load_tolerances, mismatch
-from .statsfile import Sample, compare_stats, compute_sample, load_stats, stats_file
+from .statsfile import FORMAT, Sample, compare_stats, compute_sample, load_stats, stats_file
+
+
+def _reference(ctx: CheckContext) -> tuple[dict | None, str]:
+    """The reference stats (a ref or stats file), or None and why there is none."""
+    path = ctx.reference_path
+    if path is None:
+        return None, "no reference: give `--reference` or `reference` in the spec"
+    if is_zarr(path) or not provides(path, "stats", FORMAT):
+        return None, f"the reference {path} has no stats section (a zarr or a meta file?)"
+    return load_stats(path), ""
 
 
 def _sample(ctx: CheckContext) -> Sample:
     if "sample" not in ctx.cache:
-        reference = load_stats(ctx.spec.reference_stats) if ctx.spec.reference_stats else None
+        reference, ctx.cache["reference_stats_missing"] = _reference(ctx)
         ctx.cache["reference_stats"] = reference
         # Sample the reference's dates, so matches_reference_stats compares the same sample.
         ctx.cache["sample"] = compute_sample(ctx.dataset, ctx.spec, dates_from=reference)
@@ -171,14 +183,14 @@ def _resolution(sample: Sample, estimates: dict, calibrated: dict, z: float) -> 
 
 @check("stats")
 def physical_ranges(ctx: CheckContext) -> Iterator[Finding]:
-    """Sampled values and stored min/max lie inside the ranges of the spec's `ranges_file`.
+    """Sampled values and stored min/max lie inside the `min`/`max` of the spec's `variables`.
 
-    Skipped without a `ranges_file`; variables not in it are listed as INFO.
+    Skipped when no variable has a `min` or `max`; variables without one are listed as INFO.
     """
-    if ctx.spec.ranges_file is None:
-        yield skipped("no `ranges_file` in spec")
+    ranges = ctx.spec.ranges()
+    if not ranges:
+        yield skipped("no `min`/`max` for any variable in the spec")
         return
-    ranges = load_ranges(ctx.spec.ranges_file)
     sample = _sample(ctx)
     unlisted = [v for v in sample.variables if v not in ranges]
     if unlisted:
@@ -207,13 +219,17 @@ def physical_ranges(ctx: CheckContext) -> Iterator[Finding]:
 
 @check("stats")
 def finite_values(ctx: CheckContext) -> Iterator[Finding]:
-    """No inf on the sampled dates and points, and no NaN unless the dataset sets `allow_nans`."""
-    allow_nans = ctx.dataset.attrs.get("allow_nans", False)
+    """No inf on the sampled dates and points, and NaN only in the variables allowed to have them.
+
+    The variables come from the dataset's `allow_nans` if it is a list, else from the spec; with
+    `allow_nans: true` (and no list in the spec) NaNs are not checked.
+    """
+    allowed = _nans_allowed(ctx)
     sample = _sample(ctx)
     for name in sample.variables:
         per_date = sample.per_date(name)
         for t, date, n_nan, n_inf in zip(sample.time_index, sample.dates, per_date["n_nan"], per_date["n_inf"]):
-            if n_nan and not allow_nans:
+            if n_nan and allowed is not None and name not in allowed:
                 yield error(f"{n_nan} NaN values", variable=name, time=date, details={"time_index": t, "n_nan": n_nan})
             if n_inf:
                 yield error(f"{n_inf} infinite values",
@@ -223,8 +239,21 @@ def finite_values(ctx: CheckContext) -> Iterator[Finding]:
                                 "time_index": t,
                                 "n_inf": n_inf
                             })
-    if allow_nans:
+    if allowed is None:
         yield info("NaNs not checked: dataset allows NaNs")
+    elif allowed:
+        yield info(f"NaNs allowed in {len(allowed)} variables", details={"variables": sorted(allowed)})
+
+
+def _nans_allowed(ctx: CheckContext) -> set[str] | None:
+    """The variables that may contain NaNs, None for all."""
+    attr = ctx.dataset.attrs.get("allow_nans", False)
+    if isinstance(attr, list):
+        return {str(v) for v in attr}
+    spec = ctx.spec.nan_variables()
+    if isinstance(spec, set):
+        return spec
+    return None if attr is True or spec is True else set()
 
 
 @check("stats")
@@ -257,14 +286,15 @@ def statistics_window_valid(ctx: CheckContext) -> Iterator[Finding]:
 def constant_fields(ctx: CheckContext) -> Iterator[Finding]:
     """Fields in `constant_fields` never change; no other field is constant in time or uniform in space.
 
-    `constant_fields` comes from the dataset, or from the spec if the dataset has none. A field in
+    `constant_fields` comes from the dataset, or from the spec's variables marked `constant` if the
+    dataset has none. A field in
     it that changes is an ERROR; any other field identical on all sampled dates, or uniform in
     space on one date, is a WARNING. Computed forcings are exempt from the uniform-in-space test.
     """
     sample = _sample(ctx)
     listed = ctx.dataset.attrs.get("constant_fields")
     if listed is None:
-        listed = ctx.spec.constant_fields or []
+        listed = ctx.spec.constant_field_names() or []
     # Forcings like cos_julian_day, or insolation at night, are legitimately uniform in space.
     forcings = {v for v, m in ctx.dataset.attrs.get("variables_metadata", {}).items() if m.get("computed_forcing")}
     for name in sample.variables:
@@ -296,13 +326,14 @@ def constant_fields(ctx: CheckContext) -> Iterator[Finding]:
 
 @check("stats")
 def matches_reference_stats(ctx: CheckContext) -> Iterator[Finding]:
-    """Stored and sample statistics match the spec's `reference_stats`, on the reference's sample.
+    """Stored and sample statistics match the reference (`--reference` or the spec's `reference`, a
+    ref or stats file), on the reference's sample.
 
-    Skipped without `reference_stats`. Same comparison as `stats-bee compare`.
+    Skipped without a reference. Same comparison as `stats-bee compare`.
     """
-    if ctx.spec.reference_stats is None:
-        yield skipped("no `reference_stats` in spec")
-        return
     sample, reference = _sample(ctx), ctx.cache["reference_stats"]
+    if reference is None:
+        yield skipped(ctx.cache["reference_stats_missing"])
+        return
     stats = stats_file(ctx.dataset, ctx.spec, sample, dates_from=reference)
     yield from compare_stats(stats, reference, ctx.spec.tolerances.compare_atol_stdev).findings

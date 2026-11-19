@@ -5,6 +5,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Command-line entry points:
 - `hive <dataset>` runs all bees
+- `hive dump <dataset>` writes a ref file: the `dump` of each bee (meta file, stats file) in one file,
+  see varda_hive/honeycomb/files.py
 - `meta-bee check`, `stats-bee check` and `spot-bee check` run one bee each, with the same options
 - extra subcommands of a bee, like `stats-bee dump` or `meta-bee compare`, live in the bee's own
   `cli.py` (see varda_hive/bees/stats/cli.py and varda_hive/bees/meta/cli.py), imported only when that
@@ -24,11 +26,12 @@ import importlib
 from pathlib import Path
 import sys
 import traceback
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence
 
 import yaml
 
 from .honeycomb import BEES, CheckContext, Dataset, Severity, checks_for, load_spec, run
+from .honeycomb.files import save_ref
 from .honeycomb.report import to_json, to_markdown, to_text
 
 BEE_DESCRIPTIONS = {
@@ -47,8 +50,8 @@ def _add_check_args(p: ArgumentParser, with_bees: bool) -> None:
     p.add_argument("dataset", nargs="?", help="path to the anemoi zarr dataset")
     p.add_argument("--spec", help="dataset spec YAML (see templates/spec.example.yaml)")
     p.add_argument("--reference",
-                   help="reference to compare with: a zarr dataset or a meta file (`meta-bee dump`); "
-                   "overrides the spec's `reference_meta`")
+                   help="reference to compare with: a ref file (`hive dump`), a meta or stats file, or a zarr "
+                   "(meta-bee only); overrides the spec's `reference`")
     p.add_argument("--select", nargs="+", metavar="CHECK", help="run only these checks")
     p.add_argument("--format", choices=("text", "json", "markdown"), default="text")
     p.add_argument("--fail-on", choices=("error", "warning"), default="error")
@@ -109,16 +112,62 @@ def guarded(prog: str, fn: Callable[[Namespace], int]) -> Callable[[Namespace], 
     return wrapper
 
 
+# Bees with a section in a ref file, i.e. a `dump_section` in their cli.py.
+DUMP_BEES = ("meta", "stats")
+
+
 def hive_main(argv: list[str] | None = None) -> int:
-    p = ArgumentParser(prog="hive", description="Run all bees on an anemoi dataset.")
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["dump"]:
+        return _hive_dump_main(argv[1:])
+    p = ArgumentParser(prog="hive",
+                       description="Run all bees on an anemoi dataset.",
+                       epilog="`hive dump <dataset> --spec S -o X.ref.yaml` writes the reference of all bees.")
     _add_check_args(p, with_bees=True)
     args = p.parse_args(argv)
     return guarded("hive", lambda a: _run_checks(a, a.bees, "hive"))(args)
 
 
+def _hive_dump_main(argv: list[str]) -> int:
+    p = ArgumentParser(prog="hive dump",
+                       formatter_class=RawDescriptionHelpFormatter,
+                       description="Write the ref file of an anemoi dataset: the meta file (`meta-bee dump`) and the "
+                       "stats file (`stats-bee dump`) in one file. Commit it next to the spec and set "
+                       "`reference: <name>.ref.yaml` in the spec.",
+                       epilog="""examples:
+  hive dump data.zarr --spec checks/data.yaml -o checks/data.ref.yaml
+  hive dump new.zarr --spec checks/data.yaml --dates-from checks/data.ref.yaml -o new.ref.yaml""")
+    p.add_argument("dataset", help="path to the anemoi zarr dataset")
+    p.add_argument("--spec", help="dataset spec YAML (sampling settings)")
+    p.add_argument("--dates-from",
+                   metavar="REF",
+                   help="sample the dates of this ref or stats file (e.g. the reference), so the two compare")
+    p.add_argument("--bees", nargs="+", choices=DUMP_BEES, default=list(DUMP_BEES), help="sections to write")
+    p.add_argument("-o",
+                   "--output",
+                   default="-",
+                   help="output file, YAML for .yaml/.yml, otherwise JSON (default: JSON to stdout)")
+    return guarded("hive dump", _hive_dump)(p.parse_args(argv))
+
+
+def _hive_dump(args: Namespace) -> int:
+    dataset, spec = Dataset(args.dataset), load_spec(args.spec)
+    dates_from = Path(args.dates_from) if args.dates_from else None
+    if dates_from is not None and not dates_from.is_file():
+        raise FileNotFoundError(f"--dates-from not found: {dates_from}")
+    sections = {bee: _bee_cli(bee).dump_section(dataset, spec, dates_from) for bee in args.bees}
+    save_ref(sections, args.output)
+    return EXIT_OK
+
+
+def _bee_cli(bee: str) -> Any:
+    """`bee`'s own cli.py; imported by name so only this bee is loaded."""
+    return importlib.import_module(f".bees.{bee}.cli", __package__)
+
+
 def _subcommands(bee: str) -> Sequence[Subcommand]:
-    """The extra subcommands of `bee`, from its own `cli.py`; imported here so only this bee is loaded."""
-    return importlib.import_module(f".bees.{bee}.cli", __package__).SUBCOMMANDS
+    """The extra subcommands of `bee`, from its own `cli.py`."""
+    return _bee_cli(bee).SUBCOMMANDS
 
 
 def _bee_main(bee: str, description: str, argv: list[str] | None, extra: Sequence[Subcommand] = ()) -> int:

@@ -7,8 +7,10 @@
 compares two of them and `stats-bee calibrate` writes calibrated tolerances. `stats-bee check` is
 the generic one, see varda_hive/cli.py."""
 from argparse import ArgumentParser, Namespace
+from pathlib import Path
+from typing import Any
 
-from ...honeycomb import Dataset, Report, Severity, load_spec
+from ...honeycomb import Dataset, Report, Severity, Spec, load_spec
 from ...honeycomb.report import to_json, to_text
 from .calibrate import calibrate
 from .statsfile import CLOSE, DIFFERS, IDENTICAL, compare_stats, compute_stats, load_stats, save_stats
@@ -26,11 +28,17 @@ See docs/stats-bee.md for the file layout and how the tolerances work."""
     p.add_argument("--spec", help="dataset spec YAML (sampling settings)")
     p.add_argument("--dates-from",
                    metavar="STATS",
-                   help="sample the dates of this stats file (e.g. the reference), so the two compare")
+                   help="sample the dates of this stats or ref file (e.g. the reference), so the two compare")
     p.add_argument("-o",
                    "--output",
                    default="-",
                    help="output file, YAML for .yaml/.yml, otherwise JSON (default: JSON to stdout)")
+
+
+def dump_section(dataset: Dataset, spec: Spec, dates_from: Path | None) -> dict[str, Any]:
+    """stats-bee's section of a ref file (`hive dump`): the stats file, on the dates of `dates_from`
+    (a stats or ref file) if given."""
+    return compute_stats(dataset, spec, load_stats(dates_from) if dates_from else None)
 
 
 def _dump(args: Namespace) -> int:
@@ -45,11 +53,12 @@ def _add_compare_args(p: ArgumentParser) -> None:
     p.epilog = """examples:
   stats-bee compare new.stats.yaml checks/data.stats.yaml
   stats-bee compare new.stats.yaml checks/data.stats.yaml --atol-stdev 1e-6 --all
+  stats-bee compare new.ref.yaml checks/data.ref.yaml   # the stats sections of two ref files (`hive dump`)
 
 Values are identical (bitwise), close (|diff| <= atol-stdev * stdev of the variable) or differ.
 See docs/stats-bee.md."""
-    p.add_argument("stats", help="stats file to check")
-    p.add_argument("reference", help="reference stats file")
+    p.add_argument("stats", help="stats file (or ref file) to check")
+    p.add_argument("reference", help="reference stats file (or ref file)")
     p.add_argument("--spec", help="dataset spec YAML (tolerances.compare_atol_stdev)")
     p.add_argument("--atol-stdev", type=float, help="override tolerances.compare_atol_stdev")
     p.add_argument("--format", choices=("text", "json"), default="text")
