@@ -13,7 +13,8 @@ set of key = value matches, reads its bytes and decodes them with eccodes (the `
 Which message belongs to a variable comes from the dataset's `variables_metadata[var].mars` by default:
 
 - `levtype: pl`: shortName = param, level = levelist, typeOfLevel = isobaricInhPa
-- otherwise: shortName = param
+- otherwise: shortName = param, and level = levelist if the metadata has a levelist and the index a
+  `level` column
 
 and from the spec args where that is not enough (renamed or rescaled fields, other indexes):
 
@@ -27,6 +28,11 @@ and from the spec args where that is not enough (renamed or rescaled fields, oth
           W_SO: {index: fg, match: {shortName: W_SO, "level:d": "0.01"}}
           TOT_PREC_1H: {index: fg, match: {shortName: TOT_PREC}, scale: 0.001}
         skip: {TOT_PREC_6H: "6 h accumulation of TOT_PREC"}
+        members: [1, 2, 3]                 # GRIB `number` of each dataset member, default 0, 1, ...
+
+A configuration error of one variable (unknown override key or index, a `match` column the index
+lacks, ensemble data without a `number` column) is raised by `fetch` for that variable only, so
+spot-bee reports it as an ERROR of that variable and still compares the others.
 
 Variables that cannot be compared one-to-one raise `NotComparable`: those in `skip`, and, unless
 listed in `variables`, computed forcings, derived fields (metadata `process`, e.g. accumulations),
@@ -52,6 +58,10 @@ class _Target:
     offset: float = 0.0
 
 
+class _ConfigError(str):
+    """A variable's configuration error, raised by `fetch` so that only this variable fails."""
+
+
 @dataclass
 class _Index:
     dbs: list[Path]
@@ -70,6 +80,7 @@ class GribIndexSource:  # pylint: disable=too-many-instance-attributes
             variables: dict[str, dict[str, Any]] | None = None,
             skip: dict[str, str] | None = None,
             pl_type_of_level: str = "isobaricInhPa",
+            members: list[int] | None = None,
             base_dir: str | Path | None = None):
         if not indexes:
             raise ValueError("GribIndexSource needs at least one entry in `indexes`")
@@ -78,16 +89,22 @@ class GribIndexSource:  # pylint: disable=too-many-instance-attributes
             name: _Index([self.root / p for p in ([dbs] if isinstance(dbs, str) else dbs)])
             for name, dbs in indexes.items()
         }
+        empty = sorted(name for name, index in self.indexes.items() if not index.dbs)
+        if empty:
+            raise ValueError(f"grib index {empty} lists no DB")
         self.default_index = default_index or next(iter(indexes))
         if self.default_index not in self.indexes:
             raise ValueError(f"default_index {self.default_index!r} is not one of {sorted(self.indexes)}")
         self.overrides = variables or {}
         self.skip = skip or {}
         self.pl_type_of_level = pl_type_of_level
+        self.members = None if members is None else [int(m) for m in members]
         for db in (db for index in self.indexes.values() for db in index.dbs):
             if not db.is_file():
                 raise FileNotFoundError(f"grib index {db} not found")
-        self.targets: dict[str, _Target | str] = {}  # variable -> target, or the NotComparable reason
+        # variable -> target, the NotComparable reason, or the configuration error
+        self.targets: dict[str, _Target | str | _ConfigError] = {}
+        self.numbers: list[str] = []  # GRIB `number` of each dataset member, empty for a single member
         self.n_members = 1
         self.n_grid: int | None = None
         self._rows: dict[tuple[str, str], list[dict[str, str]]] = {}  # (index, date) -> rows, latest date only
@@ -97,10 +114,17 @@ class GribIndexSource:  # pylint: disable=too-many-instance-attributes
         for index in self.indexes.values():
             index.columns = set.intersection(*(_columns(db) for db in index.dbs))
         self.n_members, self.n_grid = dataset.data.shape[2], dataset.data.shape[-1]
+        if self.members is not None and len(self.members) != self.n_members:
+            raise ValueError(f"`members` lists {len(self.members)} GRIB numbers, dataset has {self.n_members} members")
+        if self.n_members > 1:
+            self.numbers = [str(m) for m in (self.members if self.members is not None else range(self.n_members))]
         metadata = dataset.attrs.get("variables_metadata", {})
-        self.targets = {name: self._target(name, metadata.get(name, {})) for name in dataset.variables}
-        if self.n_members > 1 and "number" not in set.union(*(i.columns for i in self.indexes.values())):
-            raise ValueError("dataset has several ensemble members but the grib index has no `number` column")
+        self.targets = {}
+        for name in dataset.variables:
+            try:
+                self.targets[name] = self._target(name, metadata.get(name, {}))
+            except (ValueError, KeyError, TypeError) as exc:
+                self.targets[name] = _ConfigError(f"source variable {name}: {exc}")
 
     def _target(self, name: str, meta: dict[str, Any]) -> _Target | str:
         if name in self.skip:
@@ -109,7 +133,7 @@ class GribIndexSource:  # pylint: disable=too-many-instance-attributes
             override = dict(self.overrides[name])
             unknown = set(override) - {"index", "match", "scale", "offset"}
             if unknown:
-                raise ValueError(f"source variable {name}: unknown keys {sorted(unknown)}")
+                raise ValueError(f"unknown keys {sorted(unknown)}")
             target = _Target(index=str(override.get("index", self.default_index)),
                              match={
                                  str(k): _text(v)
@@ -123,35 +147,47 @@ class GribIndexSource:  # pylint: disable=too-many-instance-attributes
                 return reason
             mars = meta["mars"]
             match = {"shortName": _text(mars["param"])}
+            levelist = mars.get("levelist")
             if mars.get("levtype") == "pl":
-                match |= {"level": _text(mars["levelist"]), "typeOfLevel": self.pl_type_of_level}
+                if levelist is None:
+                    raise ValueError("pressure-level variable without `levelist` in its mars metadata")
+                match |= {"level": _text(levelist), "typeOfLevel": self.pl_type_of_level}
+            elif levelist is not None and "level" in self.indexes[self.default_index].columns:
+                match["level"] = _text(levelist)
             target = _Target(index=self.default_index, match=match)
         if target.index not in self.indexes:
-            raise ValueError(f"source variable {name}: index {target.index!r} is not one of {sorted(self.indexes)}")
+            raise ValueError(f"index {target.index!r} is not one of {sorted(self.indexes)}")
         if not target.match:
-            raise ValueError(f"source variable {name}: empty `match`")
-        missing = set(target.match) - self.indexes[target.index].columns
+            raise ValueError("empty `match`")
+        columns = self.indexes[target.index].columns
+        missing = set(target.match) - columns
         if missing:
-            raise ValueError(f"source variable {name}: index {target.index!r} has no column {sorted(missing)}")
+            raise ValueError(f"index {target.index!r} has no column {sorted(missing)}")
+        if self.numbers and "number" not in columns:
+            raise ValueError(f"dataset has {self.n_members} ensemble members but index {target.index!r} "
+                             "has no `number` column")
         return target
 
     def fetch(self, variable: str, date: np.datetime64) -> np.ndarray | None:
         target = self.targets.get(variable)
         if target is None:
             raise NotComparable("unknown to the source (bind was not called or variable not in dataset)")
+        if isinstance(target, _ConfigError):
+            raise ValueError(str(target))
         if isinstance(target, str):
             raise NotComparable(target)
         rows = self._rows_at(target.index, str(np.datetime64(date, "s")))
         fields = []
-        for member in range(self.n_members):
-            match = target.match | ({"number": str(member)} if self.n_members > 1 else {})
+        numbers: list[str | None] = [*self.numbers] or [None]
+        for number in numbers:
+            match = target.match | ({"number": number} if number is not None else {})
             found = {(r["path"], r["_offset"], r["_length"]) for r in rows if all(r[k] == v for k, v in match.items())}
             if not found:
                 return None
             if len(found) > 1:
                 raise LookupError(f"{len(found)} GRIB messages match {match} in index {target.index!r}")
             fields.append(self._decode(*found.pop()))
-        values = np.stack(fields) if self.n_members > 1 else fields[0]
+        values = np.stack(fields) if self.numbers else fields[0]
         return values * target.scale + target.offset
 
     def _rows_at(self, index: str, date: str) -> list[dict[str, str]]:

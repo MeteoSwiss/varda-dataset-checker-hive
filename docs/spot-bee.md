@@ -24,9 +24,11 @@ Findings of `matches_source`:
 | severity | when |
 |---|---|
 | ERROR | values of a variable differ from the source on a date: one finding per (variable, date) with `n_differ`, `n_nan_mismatch`, `max_abs_diff`, the first differing grid points and, for ensembles, the members |
-| ERROR | the source failed for a variable (e.g. two GRIB messages match, wrong grid size): once per variable, which is then not compared further |
+| ERROR | the source failed for a variable (e.g. two GRIB messages match, wrong grid size, a bad override): once per variable, which is then not compared further; the summary lists the dates skipped after it |
+| ERROR | the source has no data for a variable on any sampled date: usually a wrong mapping, `root` or date format; add the variable to the source's `skip` if the source really lacks it |
 | WARNING | the source has no data for a variable on some sampled dates, with the dates |
 | INFO | a variable is not comparable with the source, with the reason (see [derived variables](#derived-variables-and-forcings)) |
+| INFO, skipped | no sampled value was compared at all (every variable not comparable, unavailable or failed): fails under `--strict` |
 | INFO | `spot summary: 95 identical, 0 within tolerance, 0 differ, 19 not comparable, 0 unavailable (22 dates × 10000 points)` |
 
 The `details` of the summary list the variables of each group, with the largest absolute difference
@@ -35,7 +37,9 @@ of each and, for differing variables, the dates. Use `--format json` or `--repor
 Values count as **identical** when they are equal in the dataset's precision: the source values are
 cast to the dataset dtype (float32) first, so a GRIB value decoded as float64 that was stored
 unchanged is identical. **Within tolerance** means `|dataset - source| <= source_atol + source_rtol *
-|source|` everywhere, and NaN in both counts as equal.
+|source|` everywhere, and NaN in both counts as equal. The default `source_atol` is 0: an absolute
+default would hide faults in fields with small values (kg/kg, m). Give a variable its own `atol` when
+its source values near zero are rescaled, e.g. a precipitation in m from mm.
 
 ## Sampling
 
@@ -50,10 +54,10 @@ also finds faults on a few grid points, such as spikes.
 ## Spec fields
 
 ```yaml
-sampling: {seed: 0, n_dates: 20, n_points: all, include_dates: []}
+sampling: {seed: 0, n_dates: 20, n_points: all, include_dates: []}   # defaults: n_dates 5, n_points 1000
 tolerances:
-  source_rtol: 1.0e-4
-  source_atol: 1.0e-4
+  source_rtol: 1.0e-4                  # default
+  source_atol: 0.0                     # default
   source_per_variable:                 # overrides of rtol and/or atol
     TOT_PREC_1H: {atol: 1.0e-6}
 source:
@@ -77,7 +81,10 @@ The contract (`src/varda_hive/honeycomb/sources.py`):
 | `bind(dataset)` | no | called once before the first `fetch`, e.g. to read `variables_metadata` |
 
 Any other exception from `fetch` gives one ERROR for that variable. The other variables are still
-compared.
+compared. The field may be a masked array (masked values count as NaN); anything that is not
+numeric fails that variable. An exception from the constructor or from `bind` stops the whole check
+("check crashed"), so a plug-in should keep per-variable configuration errors for `fetch`, as
+`GribIndexSource` does.
 
 Two plug-ins ship with the hive:
 
@@ -103,7 +110,7 @@ It runs one query per date and index, so a sample of ~100 variables per date sta
 source:
   plugin: varda_hive.sources.grib_index:GribIndexSource
   args:
-    root: /scratch/mch/huppd/varda/ich1-analysis-anemoi-dataset   # base of the DB paths and of the GRIB paths in them
+    root: /scratch/mch/huppd/varda/ich1-analysis-anemoi-dataset   # base of the DB and GRIB paths; relative to the spec, default: the spec's directory
     indexes:                                   # name -> DB, or a list of DBs (e.g. per-day indexes)
       ana: ml_test/processed/grib-index-ana.db
       fg: ml_test/processed/grib-index-fg.db
@@ -115,6 +122,7 @@ source:
     skip:                                      # not comparable, with the reason
       TOT_PREC_6H: 6 h accumulation of TOT_PREC
     # pl_type_of_level: isobaricInhPa
+    # members: [1, 2, 3]                       # GRIB `number` of each dataset member, default 0, 1, ...
 ```
 
 **Mapping.** Without an override, a variable's messages come from its
@@ -122,8 +130,8 @@ source:
 
 | mars entry | matched keys |
 |---|---|
-| `levtype: pl` | `shortName = param`, `level = levelist`, `typeOfLevel = pl_type_of_level` |
-| any other | `shortName = param` |
+| `levtype: pl` | `shortName = param`, `level = levelist`, `typeOfLevel = pl_type_of_level` (an ERROR without `levelist`) |
+| any other | `shortName = param`, and `level = levelist` if `levelist` is set and the index has a `level` column |
 
 An override gives:
 
@@ -133,9 +141,11 @@ An override gives:
 | `match` | the index columns to match | |
 | `scale`, `offset` | applied as `value * scale + offset` | `1`, `0` |
 
-The `match` keys must be columns of the index. Wrong keys fail when the source is bound, with an
-ERROR that names the variable. Index values are text, so write numbers the way the index stores them
-(`"0.01"`, `850`).
+The `match` keys must be columns of the index. A configuration error of one variable (unknown key or
+index, a column the index lacks, an empty `match`, a `pl` variable without `levelist`) gives one ERROR
+for that variable, and the other variables are still compared. Errors of the source as a whole (a DB
+that does not exist, an index without DBs, `members` of the wrong length) stop the check. Index values
+are text, so write numbers the way the index stores them (`"0.01"`, `850`).
 
 **Not comparable without an override:**
 - variables in `skip`
@@ -145,11 +155,13 @@ ERROR that names the variable. Index values are text, so write numbers the way t
   time-indexed archive
 - variables without mars metadata
 
-**Errors** that the ICH1 tests used to pass silently:
+**Errors** rather than wrong comparisons:
 - more than one message matching a (variable, date)
 - a message whose `numberOfDataPoints` differs from the dataset grid
 
-**Ensembles:** with several ensemble members, `number` = 0, 1, ... is matched as well.
+**Ensembles:** with several ensemble members, `number` is matched as well: 0, 1, ... by default, or
+the numbers listed in `members` (e.g. `[1, 2, 3]` for a dataset without the control member). Every
+index a variable uses needs a `number` column.
 
 GRIB values are returned in the order of the message. That is the dataset grid order for an
 unstructured ICON grid read with anemoi's `grid_definition: icon`, which keeps the GRIB order. A
@@ -177,10 +189,35 @@ Options for later:
 - **Stored references:** values computed by hand for a few fixed dates, kept as files in the dataset repo.
 - **Calling the upstream forcing implementation:** earthkit as an optional dependency, instead of a copy.
 - **One source for build and check:** the same source code used to build the dataset and to check it, so the mapping lives in one place.
+- **Batched or point requests:** an optional `prefetch(date, variables)` or a `points` argument in the
+  source contract, for FDB/polytope sources where one request per field is slow.
+- **A small dataset view for `bind`:** variables, metadata, dates, members, grid size and lat/lon,
+  instead of the internal `Dataset`.
+- **Source errors at spec load:** build the plug-in when the spec is loaded, so a wrong plug-in or
+  path exits with 2 (configuration) instead of 1.
+- **`spot-bee mapping`:** print variable → index, match and reason without a full run.
+- **Pruning per-day DBs by date** in `GribIndexSource`, once long lists of DBs make it slow.
+
+## Limits
+
+- **Sampled dates only.** A fault on one time step is found only if that step is sampled: with
+  `n_dates` of N steps, the chance is about n/N. Put known-risky steps in `include_dates`, or use
+  `n_dates: all` for a release.
+- **Not compared with the source:** constant fields (stats-bee's `constant_fields` only checks that
+  they don't change in time, not that they are the right field), derived fields and computed
+  forcings, and the coordinates (`latitudes`, `longitudes`).
+- **Grid order is trusted.** Only the number of grid points is checked; a source in another order
+  shows up as "differ" everywhere, not as a mapping error.
+- **The mapping comes from the dataset's own `variables_metadata`.** A fault that changes both the
+  metadata and the data the same way is not seen; overrides in the spec avoid this for the
+  variables they list.
+- **A failure stops a variable.** After the first source failure a variable is not compared on
+  later dates (listed in the summary's `not_compared_after_failure`).
 
 ## Example: Varda-tiny (ICH1 test dataset)
 
-With the spec above, `n_dates: 20`, `n_points: 10000` and `include_dates: [99, 100]`:
+With the spec above (and `source_per_variable: {TOT_PREC_1H: {atol: 1.0e-6}}`, as in
+`tests/test_spot_ich1.py`), `n_dates: 20`, `n_points: 10000` and `include_dates: [99, 100]`:
 
 ```text
 info    spot.matches_source: not comparable with source: 6 h accumulation of TOT_PREC [TOT_PREC_6H]

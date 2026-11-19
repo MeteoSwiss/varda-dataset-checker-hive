@@ -20,20 +20,24 @@ Reference it from the spec as:
 
     source:
       plugin: source_plugin_example.py:ZarrSource
-      args: {path: /path/to/reference.zarr}
+      args: {path: /path/to/reference.zarr}   # or relative to the spec file
 """
+from pathlib import Path
+
 import numpy as np
 
-from varda_hive.honeycomb import Dataset
+from varda_hive.honeycomb import Dataset, NotComparable
 
 
 class ZarrSource:
-    def __init__(self, path: str):
-        self.ds = Dataset(path)
+    def __init__(self, path: str, base_dir: str | Path = "."):
+        self.ds = Dataset(Path(base_dir) / path)  # a relative path is relative to the spec file
         self._time_index = {d: t for t, d in enumerate(self.ds.dates)}
 
     def fetch(self, variable: str, date: np.datetime64) -> np.ndarray | None:
+        if variable not in self.ds.variables:
+            raise NotComparable("not in the reference dataset")
         t = self._time_index.get(np.datetime64(date, "s"))
-        if t is None or variable not in self.ds.variables:
+        if t is None:
             return None
-        return self.ds.data[t, self.ds.index(variable)].reshape(-1)
+        return self.ds.data[t, self.ds.index(variable)]  # (ensemble, grid)

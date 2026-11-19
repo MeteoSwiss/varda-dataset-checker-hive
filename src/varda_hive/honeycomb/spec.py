@@ -47,8 +47,9 @@ class Tolerances(_Strict):
     # reported as "close" instead of "differs". 0 means only bitwise identical values pass.
     compare_atol_stdev: float = 0.0
     # spot-bee: dataset vs source values agree if |diff| <= source_atol + source_rtol * |source|.
+    # atol 0: an absolute default would hide faults in small-valued fields (kg/kg, m); set it per variable.
     source_rtol: float = 1e-4
-    source_atol: float = 1e-4
+    source_atol: float = 0.0
     # Per-variable overrides of source_rtol/source_atol, e.g. {TOT_PREC_1H: {atol: 1.0e-6}}.
     source_per_variable: dict[str, "SourceTolerance"] = Field(default_factory=dict)
 

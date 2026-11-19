@@ -44,7 +44,8 @@ ranges_file: physical_ranges.yaml
 sampling:
   seed: 0
   n_dates: 20           # random dates over the whole time range, or "all"
-  n_points: 10000       # grid points for mean/stdev per date (min/max/NaN always full domain), or "all"
+  n_points: 10000       # grid points, or "all": stats-bee's mean/stdev per date (min/max/NaN always full
+                        # domain) and the points spot-bee compares with the source
   include_dates: []     # time indices always checked in addition
 
 tolerances:
@@ -52,7 +53,7 @@ tolerances:
   z_threshold: 5.0          #   ... plus z_threshold * sampling error (0 for n_dates: all)
   compare_atol_stdev: 0.0   # stats file vs reference: "close" within this * stdev, else "differs"
   source_rtol: 1.0e-4       # spot-bee: dataset vs source values, |diff| <= atol + rtol * |source|
-  source_atol: 1.0e-4
+  source_atol: 0.0          #   no absolute default: it would hide faults in small-valued fields
   source_per_variable: {}   # overrides, e.g. {TOT_PREC_1H: {atol: 1.0e-6}}
 
 # Accepted warnings, demoted to INFO: {check: [variables]}, "*" for all variables
@@ -65,12 +66,15 @@ ignore_warnings:
 # source:
 #   plugin: varda_hive.sources.grib_index:GribIndexSource
 #   args:
-#     root: /path/to/dataset-repo           # base of the index paths and of the GRIB paths in them
-#     indexes: {ana: grib-index-ana.db, fg: grib-index-fg.db}
-#     default_index: ana
+#     root: /path/to/dataset-repo           # base of the index and GRIB paths; default: this file's directory
+#     indexes: {ana: grib-index-ana.db, fg: [fg-day1.db, fg-day2.db]}   # a DB or a list of DBs
+#     default_index: ana                    # default: the first index
 #     variables:                            # overrides of the mapping from variables_metadata.mars
-#       TOT_PREC_1H: {index: fg, match: {shortName: TOT_PREC}, scale: 0.001}
+#       TOT_PREC_1H: {index: fg, match: {shortName: TOT_PREC}, scale: 0.001}   # value * scale + offset
+#       T_2M_C: {match: {shortName: T_2M}, offset: -273.15}
 #     skip: {TOT_PREC_6H: 6 h accumulation}
+#     pl_type_of_level: isobaricInhPa       # typeOfLevel matched for levtype pl
+#     members: [0, 1, 2]                    # GRIB `number` of each ensemble member, default 0, 1, ...
 # or another anemoi zarr, e.g. a trusted copy (templates/source_plugin_example.py):
 #   plugin: source_plugin_example.py:ZarrSource
 #   args: {path: /path/to/reference.zarr}

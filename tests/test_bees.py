@@ -206,6 +206,31 @@ def test_spot_not_comparable_and_ensemble(dataset_path, tmp_path):
     assert (f.variable, f.details["members"], f.details["first_points"]) == ("T_850", [1], [4])
 
 
+def test_spot_template_zarr_source_ensemble(dataset_path, tmp_path):
+    """The template plug-in returns (ensemble, grid), resolves a relative path against the spec and reports
+    a variable the reference lacks as not comparable."""
+    group = zarr.open_group(str(dataset_path), mode="r+")
+    two = np.concatenate([group["data"][:]] * 2, axis=2)
+    group.create_dataset("data", data=two, chunks=(1, len(VARIABLES), 2, NG), overwrite=True)
+    reference = tmp_path / "spec_dir" / "reference.zarr"
+    zarr.copy_store(zarr.DirectoryStore(str(dataset_path)), zarr.DirectoryStore(str(reference)))
+    attrs = json.loads((reference / ".zattrs").read_text())
+    attrs["variables"] = VARIABLES[:-1]  # V_10M not in the reference
+    (reference / ".zattrs").write_text(json.dumps(attrs))
+    spec = Spec(source={
+        "plugin": f"{TEMPLATES}/source_plugin_example.py:ZarrSource",
+        "args": {
+            "path": "reference.zarr"
+        }
+    },
+                sampling={"n_dates": 3},
+                base_dir=tmp_path / "spec_dir")
+    assert _errors(dataset_path, "spot", spec) == []
+    summary = _spot_summary(dataset_path, spec)
+    assert summary.details["identical"] == VARIABLES[:-1] and summary.details["n_members"] == 2
+    assert summary.details["not_comparable"] == {"V_10M": "not in the reference dataset"}
+
+
 def test_spot_source_shape_and_failure(dataset_path, tmp_path):
     (tmp_path / "bad_source.py").write_text("import numpy as np\n"
                                             "class S:\n"
@@ -216,12 +241,15 @@ def test_spot_source_shape_and_failure(dataset_path, tmp_path):
     spec = Spec(source={"plugin": "bad_source.py:S"}, sampling={"n_dates": 3}, base_dir=tmp_path)
     report = run(CheckContext(Dataset(dataset_path), spec), bees=["spot"])
     errors = [f for f in report.findings if f.severity == Severity.ERROR]
-    assert sorted(f.variable for f in errors) == ["FIS", "T_2M", "T_850", "V_10M"]  # once per variable
+    assert sorted(f.variable for f in errors) == ["FIS", "T_2M", "T_850", "U_10M", "V_10M"]  # once per variable
     assert any("disk gone" in f.message for f in errors)
-    [warn] = [f for f in report.findings if f.severity == Severity.WARNING]
-    assert warn.variable == "U_10M" and len(warn.details["dates"]) == 3
+    [never] = [f for f in errors if f.variable == "U_10M"]  # unavailable on every date: likely a wrong mapping
+    assert never.message == "not available from source on any of 3 sampled dates"
+    assert [f.message for f in report.findings
+            if f.skipped] == ["skipped: no sampled value was compared with the source"]
     summary = _spot_summary(dataset_path, spec)
-    assert len(summary.details["failed"]) == 4 and summary.details["unavailable"] == {"U_10M": warn.details["dates"]}
+    assert len(summary.details["failed"]) == 4 and summary.details["unavailable"] == {"U_10M": never.details["dates"]}
+    assert len(summary.details["not_compared_after_failure"]["T_2M"]) == 2  # the dates after the first failure
 
 
 def test_cli(dataset_path, write_spec, capsys):

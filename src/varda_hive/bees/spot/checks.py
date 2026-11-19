@@ -42,12 +42,16 @@ class _SpotRun:  # pylint: disable=too-many-instance-attributes
     not_comparable: dict[str, str] = field(default_factory=dict)  # variable -> reason
     unavailable: dict[str, list[str]] = field(default_factory=dict)  # variable -> dates
     failed: dict[str, str] = field(default_factory=dict)  # variable -> first failure, reported once
+    not_compared: dict[str, list[str]] = field(default_factory=dict)  # failed variable -> dates skipped after
 
     def compare_step(self, ds: Dataset, t: int) -> Iterator[Finding]:
         step = ds.step(t)  # (variable, ensemble, grid)
         when = ds.date_str(t)
         for i, name in enumerate(ds.variables):
-            if name in self.not_comparable or name in self.failed:
+            if name in self.failed:
+                self.not_compared.setdefault(name, []).append(when)
+                continue
+            if name in self.not_comparable:
                 continue
             expected = self._fetch(name, ds.dates[t], when)
             if isinstance(expected, Finding):
@@ -64,16 +68,16 @@ class _SpotRun:  # pylint: disable=too-many-instance-attributes
         """The source field as (ensemble, grid), None if the source has none, or the ERROR of a failure."""
         try:
             fetched = self.source.fetch(name, date)  # pylint: disable=assignment-from-no-return  # Protocol stub
+            expected = None if fetched is None else _as_field(fetched)
         except NotComparable as exc:
             self.not_comparable[name] = str(exc) or "not comparable"
             return None
         except Exception as exc:  # pylint: disable=broad-exception-caught
             self.failed[name] = f"source failed at {when}: {type(exc).__name__}: {exc}"
             return error(self.failed[name], variable=name, time=when)
-        if fetched is None:
+        if expected is None:
             self.unavailable.setdefault(name, []).append(when)
             return None
-        expected = np.asarray(fetched)
         expected = expected.reshape(1, -1) if expected.ndim == 1 else expected
         if expected.shape != self.shape:
             self.failed[name] = f"source field has shape {expected.shape}, dataset has {self.shape}"
@@ -99,7 +103,7 @@ class _SpotRun:  # pylint: disable=too-many-instance-attributes
             "n_differ": int(bad.sum()),
             "n_nan_mismatch": int((a_nan != e_nan).sum()),
             "max_abs_diff": max_diff,
-            "first_points": self.points[cols][:10].tolist(),
+            "first_points": self.points[np.unique(cols)][:10].tolist(),
         }
         if actual.shape[0] > 1:
             details["members"] = sorted(set(members.tolist()))
@@ -131,18 +135,27 @@ class _SpotRun:  # pylint: disable=too-many-instance-attributes
                         "not_comparable": self.not_comparable,
                         "unavailable": unavailable,
                         "failed": self.failed,
+                        "not_compared_after_failure": self.not_compared,
                         "n_dates": n_dates,
                         "n_points": len(self.points),
                         "n_members": n_members,
                     })
 
 
+def _as_field(fetched: Any) -> np.ndarray:
+    """A plug-in's field as float64, masked values as NaN; raises for anything not numeric."""
+    if isinstance(fetched, np.ma.MaskedArray):
+        return np.ma.filled(fetched.astype(np.float64), np.nan)
+    return np.asarray(fetched, dtype=np.float64)
+
+
 def _max_abs_diff(actual: np.ndarray, expected: np.ndarray) -> float | None:
-    """Largest |actual - expected| over the values where both are finite; None if there are none."""
+    """Largest |actual - expected|, ignoring NaN (and equal infinities); inf if only one side is infinite;
+    None if no pair is comparable."""
     with np.errstate(invalid="ignore"):
         diff = np.abs(actual.astype(np.float64) - expected.astype(np.float64))
-    finite = diff[np.isfinite(diff)]
-    return float(finite.max()) if finite.size else None
+    comparable = diff[~np.isnan(diff)]
+    return float(comparable.max()) if comparable.size else None
 
 
 @check("spot")
@@ -166,9 +179,22 @@ def matches_source(ctx: CheckContext) -> Iterator[Finding]:
     for t in times:
         yield from spot.compare_step(ds, t)
     for name, dates in spot.unavailable.items():
-        yield warning(f"not available from source on {len(dates)}/{len(times)} sampled dates",
-                      variable=name,
-                      details={"dates": dates})
+        if name not in spot.tallies and name not in spot.failed:
+            # Never found: a wrong mapping, root or date format looks exactly like this.
+            yield error(f"not available from source on any of {len(dates)} sampled dates",
+                        variable=name,
+                        details={"dates": dates})
+        else:
+            yield warning(f"not available from source on {len(dates)}/{len(times)} sampled dates",
+                          variable=name,
+                          details={"dates": dates})
     for name, reason in spot.not_comparable.items():
         yield info(f"not comparable with source: {reason}", variable=name)
+    if not any(tally.compared for tally in spot.tallies.values()):
+        # Nothing was checked against the source, so the check must not count as passed under --strict.
+        yield skipped("no sampled value was compared with the source",
+                      details={
+                          "n_dates": len(times),
+                          "n_points": len(spot.points)
+                      })
     yield spot.summary(len(times))
