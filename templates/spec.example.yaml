@@ -75,6 +75,7 @@ ignore_warnings:
 #     skip: {TOT_PREC_6H: 6 h accumulation}
 #     pl_type_of_level: isobaricInhPa       # typeOfLevel matched for levtype pl
 #     members: [0, 1, 2]                    # GRIB `number` of each ensemble member, default 0, 1, ...
+#     check_grid: true                      # GRIB coordinates vs the dataset's (regular/reduced ll and gg grids)
 # or another anemoi zarr, e.g. a trusted copy (templates/source_plugin_example.py):
 #   plugin: source_plugin_example.py:ZarrSource
 #   args: {path: /path/to/reference.zarr}

@@ -151,7 +151,9 @@ def test_spot_per_variable_tolerance(dataset_path, tmp_path):
     reference = build_dataset(tmp_path / "reference.zarr")
     zarr.open_group(str(dataset_path), mode="r+")["data"][:, 1] += 0.1  # T_2M off by 0.1, more than rtol * 280 K
     spec = _zarr_source_spec(reference, n_dates="all")
-    assert {f.variable for f in _errors(dataset_path, "spot", spec)} == {"T_2M"}
+    [err] = _errors(dataset_path, "spot", spec)  # one ERROR per variable, however many dates differ
+    assert err.variable == "T_2M" and err.message == f"{NT * NG}/{NT * NG} sampled values differ from source on {NT}/{NT} dates"
+    assert err.time == "2020-03-01T00:00:00" and len(err.details["dates"]) == NT
     spec = spec.model_copy(
         update={"tolerances": Spec(tolerances={
             "source_per_variable": {

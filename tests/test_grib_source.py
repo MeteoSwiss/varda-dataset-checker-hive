@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import shutil
 import sqlite3
+import sys
 
 from conftest import NG, VARIABLES, build_dataset
 import numpy as np
@@ -20,21 +21,36 @@ eccodes = pytest.importorskip("eccodes")
 
 COLUMNS = ["valid_datetime", "shortName", "level", "typeOfLevel", "number", "step"]
 
+NJ, LAT0, LON0 = 5, 48.0, 5.0  # the test grid: NJ rows from LAT0 southwards, 0.5 deg columns from LON0
 
-def _message(values: np.ndarray, packing: str = "grid_ieee") -> bytes:
-    """A GRIB2 message of `values`; NaN become missing values in a bitmap."""
+
+def grid_coordinates(n_points: int, lat0: float = LAT0) -> tuple[np.ndarray, np.ndarray]:
+    """Latitudes and longitudes of the regular test grid, in GRIB order (rows north to south)."""
+    ni = n_points // NJ
+    return np.repeat(lat0 - np.arange(NJ), ni), np.tile(LON0 + 0.5 * np.arange(ni), NJ)
+
+
+def _message(values: np.ndarray, packing: str = "grid_ieee", lat0: float = LAT0) -> bytes:
+    """A GRIB2 message of `values` on the regular test grid; NaN become missing values in a bitmap."""
     handle = eccodes.codes_grib_new_from_samples("GRIB2")
     try:
-        eccodes.codes_set(handle, "Ni", len(values) // 5)
-        eccodes.codes_set(handle, "Nj", 5)
+        ni = len(values) // NJ
+        eccodes.codes_set(handle, "Ni", ni)
+        eccodes.codes_set(handle, "Nj", NJ)
+        for key, value in [("latitudeOfFirstGridPointInDegrees", lat0),
+                           ("latitudeOfLastGridPointInDegrees", lat0 - (NJ - 1)),
+                           ("longitudeOfFirstGridPointInDegrees", LON0),
+                           ("longitudeOfLastGridPointInDegrees", LON0 + 0.5 * (ni - 1)),
+                           ("iDirectionIncrementInDegrees", 0.5), ("jDirectionIncrementInDegrees", 1.0)]:
+            eccodes.codes_set(handle, key, value)
         eccodes.codes_set(handle, "packingType", packing)
         if packing == "grid_simple":
             eccodes.codes_set(handle, "bitsPerValue", 12)
         values = values.astype(np.float64)
-        if np.isnan(values).any():
-            eccodes.codes_set(handle, "missingValue", 9999)
+        if np.isnan(values).any():  # a marker other than the decoder's default 9999, so 9999 can be a value
+            eccodes.codes_set(handle, "missingValue", -1.0e30)
             eccodes.codes_set(handle, "bitmapPresent", 1)
-            values = np.where(np.isnan(values), 9999.0, values)
+            values = np.where(np.isnan(values), -1.0e30, values)
         eccodes.codes_set_values(handle, values)
         return eccodes.codes_get_message(handle)
     finally:
@@ -47,7 +63,10 @@ class GribArchive:
     def __init__(self, root: Path, dataset: Path):
         self.root = root
         self.db = root / "index.db"
-        z = zarr.open_group(str(dataset), mode="r")
+        z = zarr.open_group(str(dataset), mode="r+")
+        lat, lon = grid_coordinates(z["data"].shape[-1])  # the dataset is on the GRIB grid
+        z.create_dataset("latitudes", data=lat, overwrite=True)
+        z.create_dataset("longitudes", data=lon, overwrite=True)
         self.data, self.dates = z["data"][:], [str(d) for d in z["dates"][:].astype("datetime64[s]")]
         (root / "data").mkdir()
         with sqlite3.connect(self.db) as con:
@@ -56,8 +75,8 @@ class GribArchive:
                         "_length INTEGER, " + ", ".join(f'"{c}" TEXT' for c in COLUMNS) + ")")
             con.execute("INSERT INTO paths VALUES (1, 'data/fields.grib')")
 
-    def add(self, t: int, values: np.ndarray, packing: str = "grid_ieee", **keys: str) -> None:
-        message = _message(values, packing)
+    def add(self, t: int, values: np.ndarray, packing: str = "grid_ieee", lat0: float = LAT0, **keys: str) -> None:
+        message = _message(values, packing, lat0)
         path = self.root / "data" / "fields.grib"
         offset = path.stat().st_size if path.exists() else 0
         with open(path, "ab") as f:
@@ -362,6 +381,55 @@ def test_grib_bitmap_missing_values(archive, dataset_path):
     zarr.open_group(str(dataset_path), mode="r+")["data"][2, VARIABLES.index("T_2M"), 0, 9] = np.nan
     findings = _findings(dataset_path, archive.spec())
     assert _errors(findings) == [] and "T_2M" in _summary(findings).details["identical"]
+
+
+def test_grib_bitmap_value_equal_to_missing_value(archive, dataset_path):
+    """Only the bitmap marks missing points: a real value equal to eccodes' missingValue (9999) stays."""
+    archive.add_clean(skip={("T_2M", 2)})
+    values = archive.data[2, VARIABLES.index("T_2M"), 0].astype(np.float64)
+    values[5], values[7] = np.nan, 9999.0
+    archive.add(2, values, shortName="T_2M")
+    data = zarr.open_group(str(dataset_path), mode="r+")["data"]
+    data[2, VARIABLES.index("T_2M"), 0, 5] = np.nan
+    data[2, VARIABLES.index("T_2M"), 0, 7] = 9999.0
+    findings = _findings(dataset_path, archive.spec())
+    assert _errors(findings) == [] and "T_2M" in _summary(findings).details["identical"]
+
+
+def test_grib_grid_not_the_datasets(archive, dataset_path):
+    """A message on another grid (here shifted 1 deg north) is an ERROR of the variable, not "differ"."""
+    archive.add_clean(skip={("V_10M", t) for t in range(len(archive.dates))})
+    for t in range(len(archive.dates)):
+        archive.add(t, archive.data[t, VARIABLES.index("V_10M"), 0], shortName="V_10M", lat0=49.0)
+    findings = _findings(dataset_path, archive.spec())
+    [err] = _errors(findings)
+    assert err.variable == "V_10M" and "is not the dataset's: point 0 is at (49.0000, 5.0000)" in err.message
+    assert _summary(findings).details["identical"] == ["T_2M", "T_850"]
+    spec = archive.spec()
+    spec.source.args["check_grid"] = False  # e.g. coordinates the dataset stores differently
+    assert _errors(_findings(dataset_path, spec)) == []
+
+
+def test_grib_odd_paths_and_path_column(tmp_path, dataset_path):
+    """DB paths with URI characters, and an index with a `path` key column of its own."""
+    root = tmp_path / "odd#dir?x=1%"
+    root.mkdir()
+    archive = GribArchive(root, dataset_path)
+    archive.add_clean()
+    with sqlite3.connect(archive.db) as con:
+        con.execute('ALTER TABLE grib_index ADD COLUMN "path" TEXT')
+        con.execute("UPDATE grib_index SET path = 'not/the/file.grib'")
+    findings = _findings(dataset_path, archive.spec())
+    assert _errors(findings) == []
+    assert _summary(findings).details["identical"] == ["T_2M", "T_850", "V_10M"]
+
+
+def test_grib_without_eccodes(archive, dataset_path, monkeypatch):
+    """Without eccodes the check fails once, with the install hint, not once per variable."""
+    archive.add_clean()
+    monkeypatch.setitem(sys.modules, "eccodes", None)
+    [err] = _findings(dataset_path, archive.spec())
+    assert err.severity == Severity.ERROR and "install varda-dataset-checker-hive[grib]" in err.message
 
 
 def test_grib_root_relative_to_spec(archive, dataset_path, write_spec):

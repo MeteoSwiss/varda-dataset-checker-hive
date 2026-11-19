@@ -44,12 +44,18 @@ def random_time_indices(n_times: int,
     return sorted(rng.choice(candidates, size=min(n, len(candidates)), replace=False).tolist())
 
 
+def sampled_dates(n_times: int, sampling: Sampling, exclude: Collection[int] = ()) -> dict[int, bool]:
+    """{time index: drawn at random} of the spec's sample: the stratified random draw plus
+    `include_dates` (False unless also drawn), without `exclude`. The one definition of the sample,
+    so spot-bee and stats-bee check the same cells."""
+    picked = {t: False for t in sampling.include_dates if 0 <= t < n_times and t not in exclude}
+    picked |= {t: True for t in random_time_indices(n_times, sampling, stratified=True, exclude=exclude)}
+    return picked
+
+
 def sample_time_indices(n_times: int, sampling: Sampling, exclude: Collection[int] = ()) -> list[int]:
-    """The sampled time indices: the stratified random draw plus `include_dates`. stats-bee draws the
-    same dates (bees/stats/statsfile.py:sample_indices), so spot-bee and stats-bee check the same cells."""
-    picked = set(random_time_indices(n_times, sampling, stratified=True, exclude=exclude))
-    picked |= {t for t in sampling.include_dates if 0 <= t < n_times and t not in exclude}
-    return sorted(picked)
+    """The sampled time indices, sorted, see `sampled_dates`."""
+    return sorted(sampled_dates(n_times, sampling, exclude))
 
 
 def sample_points(n_grid: int, sampling: Sampling, salt: int = 0) -> np.ndarray:

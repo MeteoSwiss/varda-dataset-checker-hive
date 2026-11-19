@@ -34,6 +34,11 @@ A configuration error of one variable (unknown override key or index, a `match` 
 lacks, ensemble data without a `number` column) is raised by `fetch` for that variable only, so
 spot-bee reports it as an ERROR of that variable and still compares the others.
 
+GRIB values are returned in message order. For grids whose coordinates eccodes can compute
+(regular and reduced lat/lon and Gaussian grids), the coordinates of each distinct grid are compared
+once with the dataset's latitudes/longitudes, so a source in another order is an ERROR of the
+variable rather than "differ" everywhere. Unstructured (ICON) and rotated grids are not checked.
+
 Variables that cannot be compared one-to-one raise `NotComparable`: those in `skip`, and, unless
 listed in `variables`, computed forcings, derived fields (metadata `process`, e.g. accumulations),
 constant fields (they come from a separate file) and variables without mars metadata.
@@ -47,6 +52,10 @@ from typing import Any
 import numpy as np
 
 from ..honeycomb import Dataset, NotComparable
+
+# gridType values whose coordinates eccodes computes as geographic latitudes/longitudes.
+_CHECKED_GRIDS = {"regular_ll", "reduced_ll", "regular_gg", "reduced_gg"}
+GRID_ATOL_DEG = 1e-3  # GRIB stores coordinates to 1e-6 degrees, anemoi as float64
 
 
 @dataclass(frozen=True)
@@ -81,6 +90,7 @@ class GribIndexSource:  # pylint: disable=too-many-instance-attributes
             skip: dict[str, str] | None = None,
             pl_type_of_level: str = "isobaricInhPa",
             members: list[int] | None = None,
+            check_grid: bool = True,
             base_dir: str | Path | None = None):
         if not indexes:
             raise ValueError("GribIndexSource needs at least one entry in `indexes`")
@@ -99,6 +109,7 @@ class GribIndexSource:  # pylint: disable=too-many-instance-attributes
         self.skip = skip or {}
         self.pl_type_of_level = pl_type_of_level
         self.members = None if members is None else [int(m) for m in members]
+        self.check_grid = check_grid
         for db in (db for index in self.indexes.values() for db in index.dbs):
             if not db.is_file():
                 raise FileNotFoundError(f"grib index {db} not found")
@@ -108,9 +119,19 @@ class GribIndexSource:  # pylint: disable=too-many-instance-attributes
         self.n_members = 1
         self.n_grid: int | None = None
         self._rows: dict[tuple[str, str], list[dict[str, str]]] = {}  # (index, date) -> rows, latest date only
+        self._eccodes: Any = None
+        self._coords: tuple[np.ndarray, np.ndarray] | None = None  # dataset (latitudes, longitudes)
+        self._grids_checked: set[str] = set()  # md5GridSection of the grids that match the dataset
 
     def bind(self, dataset: Dataset) -> None:
         """Map every dataset variable to its GRIB messages (or a reason not to compare it)."""
+        try:
+            import eccodes  # pylint: disable=import-outside-toplevel
+        except (ImportError, RuntimeError) as exc:
+            raise ImportError("GribIndexSource needs eccodes: install varda-dataset-checker-hive[grib]") from exc
+        self._eccodes = eccodes
+        if self.check_grid and dataset.latitudes is not None and dataset.longitudes is not None:
+            self._coords = (np.asarray(dataset.latitudes, np.float64), np.asarray(dataset.longitudes, np.float64))
         for index in self.indexes.values():
             index.columns = set.intersection(*(_columns(db) for db in index.dbs))
         self.n_members, self.n_grid = dataset.data.shape[2], dataset.data.shape[-1]
@@ -181,7 +202,8 @@ class GribIndexSource:  # pylint: disable=too-many-instance-attributes
         numbers: list[str | None] = [*self.numbers] or [None]
         for number in numbers:
             match = target.match | ({"number": number} if number is not None else {})
-            found = {(r["path"], r["_offset"], r["_length"]) for r in rows if all(r[k] == v for k, v in match.items())}
+            found = {(r["_hive_path"], r["_offset"], r["_length"])
+                     for r in rows if all(r[k] == v for k, v in match.items())}
             if not found:
                 return None
             if len(found) > 1:
@@ -197,20 +219,20 @@ class GribIndexSource:  # pylint: disable=too-many-instance-attributes
             self._rows = {k: v for k, v in self._rows.items() if k[1] == date}
             rows: list[dict[str, str]] = []
             for db in self.indexes[index].dbs:
-                with closing(sqlite3.connect(f"file:{db}?mode=ro", uri=True)) as con:
+                with closing(_connect(db)) as con:
                     con.row_factory = sqlite3.Row
+                    # `_hive_path`: grib_index may itself have a `path` key column.
                     cur = con.execute(
-                        "SELECT g.*, p.path FROM grib_index g JOIN paths p ON p.id = g._path_id "
+                        "SELECT g.*, p.path AS _hive_path FROM grib_index g JOIN paths p ON p.id = g._path_id "
                         "WHERE g.valid_datetime = ?", (date, ))
                     rows += [{k: _text(r[k]) for k in r.keys()} for r in cur]
             self._rows[key] = rows
         return self._rows[key]
 
     def _decode(self, path: str, offset: str, length: str) -> np.ndarray:
-        try:
-            import eccodes  # pylint: disable=import-outside-toplevel
-        except (ImportError, RuntimeError) as exc:
-            raise ImportError("GribIndexSource needs eccodes: install varda-dataset-checker-hive[grib]") from exc
+        eccodes = self._eccodes
+        if eccodes is None:
+            raise RuntimeError("GribIndexSource.bind was not called")
         with open(self.root / path, "rb") as f:
             f.seek(int(offset))
             message = f.read(int(length))
@@ -219,12 +241,33 @@ class GribIndexSource:  # pylint: disable=too-many-instance-attributes
             n_points = eccodes.codes_get(handle, "numberOfDataPoints")
             if self.n_grid is not None and n_points != self.n_grid:
                 raise ValueError(f"GRIB message in {path} has {n_points} points, dataset grid has {self.n_grid}")
+            self._check_grid(handle, path)
             values = eccodes.codes_get_values(handle).astype(np.float64)
             if eccodes.codes_get(handle, "bitmapPresent"):
-                values[values == eccodes.codes_get(handle, "missingValue")] = np.nan
+                # The bitmap, not the missingValue, marks missing points: a real value may equal missingValue.
+                values[eccodes.codes_get_array(handle, "bitmap") == 0] = np.nan
         finally:
             eccodes.codes_release(handle)
         return values
+
+    def _check_grid(self, handle: Any, path: str) -> None:
+        """Raise if the message's grid coordinates are not the dataset's, once per distinct grid."""
+        eccodes = self._eccodes
+        if self._coords is None or eccodes.codes_get(handle, "gridType") not in _CHECKED_GRIDS:
+            return
+        grid = eccodes.codes_get(handle, "md5GridSection")
+        if grid in self._grids_checked:
+            return
+        lat = eccodes.codes_get_array(handle, "latitudes")
+        lon = eccodes.codes_get_array(handle, "longitudes")
+        lat_ds, lon_ds = self._coords
+        deviation = np.maximum(np.abs(lat - lat_ds), np.abs((lon - lon_ds + 180) % 360 - 180))
+        worst = int(np.argmax(deviation))
+        if deviation[worst] > GRID_ATOL_DEG:
+            raise ValueError(f"GRIB grid in {path} is not the dataset's: point {worst} is at "
+                             f"({lat[worst]:.4f}, {lon[worst]:.4f}) in GRIB, ({lat_ds[worst]:.4f}, "
+                             f"{lon_ds[worst]:.4f}) in the dataset (cropped, thinned or reordered grid?)")
+        self._grids_checked.add(grid)
 
 
 def _not_comparable(meta: dict[str, Any]) -> str | None:
@@ -241,8 +284,13 @@ def _not_comparable(meta: dict[str, Any]) -> str | None:
     return None
 
 
+def _connect(db: Path) -> sqlite3.Connection:
+    """A read-only connection; the URI form escapes `?`, `#` and `%` in the path."""
+    return sqlite3.connect(f"{db.resolve().as_uri()}?mode=ro", uri=True)
+
+
 def _columns(db: Path) -> set[str]:
-    with closing(sqlite3.connect(f"file:{db}?mode=ro", uri=True)) as con:
+    with closing(_connect(db)) as con:
         columns = {row[1] for row in con.execute("PRAGMA table_info(grib_index)")}
     if not columns:
         raise ValueError(f"{db} has no grib_index table")

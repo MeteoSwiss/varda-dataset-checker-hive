@@ -23,8 +23,8 @@ Findings of `matches_source`:
 
 | severity | when |
 |---|---|
-| ERROR | values of a variable differ from the source on a date: one finding per (variable, date) with `n_differ`, `n_nan_mismatch`, `max_abs_diff`, the first differing grid points and, for ensembles, the members |
-| ERROR | the source failed for a variable (e.g. two GRIB messages match, wrong grid size, a bad override): once per variable, which is then not compared further; the summary lists the dates skipped after it |
+| ERROR | values of a variable differ from the source: one finding per variable, at its first differing date, with the totals `n_differ`, `n_nan_mismatch`, `max_abs_diff`, the first differing grid points, for ensembles the members, and in `dates` each differing date with its `n_differ` and `max_abs_diff` |
+| ERROR | the source failed for a variable (e.g. two GRIB messages match, wrong grid size or coordinates, a bad override): once per variable, which is then not compared further; the summary lists the dates skipped after it |
 | ERROR | the source has no data for a variable on any sampled date: usually a wrong mapping, `root` or date format; add the variable to the source's `skip` if the source really lacks it |
 | WARNING | the source has no data for a variable on some sampled dates, with the dates |
 | INFO | a variable is not comparable with the source, with the reason (see [derived variables](#derived-variables-and-forcings)) |
@@ -41,13 +41,21 @@ unchanged is identical. **Within tolerance** means `|dataset - source| <= source
 default would hide faults in fields with small values (kg/kg, m). Give a variable its own `atol` when
 its source values near zero are rescaled, e.g. a precipitation in m from mm.
 
+A rescaled variable (`scale`, `offset`) is often "within tolerance" rather than "identical": the
+source applies the factor in float64, the dataset build may have applied it in float32, and the two
+can differ in the last bit. That is a label, not a fault.
+
 ## Sampling
 
 spot-bee uses the spec's `sampling`, the same as stats-bee:
 - **Dates:** the stratified random dates plus `include_dates`, without the missing dates.
 - **Points:** `n_points` grid points, the same on every date, or `all`.
 
-Both bees therefore check the same cells. Reading the source is usually the cost: one GRIB message
+Both bees therefore check the same cells (one definition: `honeycomb/sampling.py:sampled_dates`).
+With `reference_stats` in the spec, stats-bee samples the reference's dates instead, while spot-bee
+keeps the spec's. They are the same dates as long as the reference was dumped with the same
+`sampling` from a dataset of the same length; spot-bee does not read stats files, to stay
+independent of stats-bee. Reading the source is usually the cost: one GRIB message
 per (variable, date), whatever `n_points` is. `n_points: all` costs little more than a subset and
 also finds faults on a few grid points, such as spikes.
 
@@ -118,11 +126,11 @@ source:
     variables:                                 # overrides of the default mapping
       W_SO: {index: fg, match: {shortName: W_SO, "level:d": "0.01"}}
       TOT_PREC_1H: {index: fg, match: {shortName: TOT_PREC}, scale: 0.001}   # renamed and rescaled in the recipe
-      VMAX_10M_1H: {index: fg, match: {shortName: VMAX_10M}}
     skip:                                      # not comparable, with the reason
       TOT_PREC_6H: 6 h accumulation of TOT_PREC
     # pl_type_of_level: isobaricInhPa
     # members: [1, 2, 3]                       # GRIB `number` of each dataset member, default 0, 1, ...
+    # check_grid: true                         # compare GRIB coordinates with the dataset's, where eccodes has them
 ```
 
 **Mapping.** Without an override, a variable's messages come from its
@@ -167,6 +175,16 @@ GRIB values are returned in the order of the message. That is the dataset grid o
 unstructured ICON grid read with anemoi's `grid_definition: icon`, which keeps the GRIB order. A
 recipe that crops, thins or reorders the grid needs its own plug-in.
 
+**Grid check:** for grids whose coordinates eccodes computes (`regular_ll`, `reduced_ll`,
+`regular_gg`, `reduced_gg`), the latitudes and longitudes of each distinct grid (`md5GridSection`) are
+compared once with the dataset's, within 0.001°. A mismatch, e.g. a cropped or reordered recipe, is an
+ERROR of the variable that names the first deviating point, instead of "differ" everywhere.
+Unstructured grids (ICON: no coordinates in the GRIB) and rotated grids are not checked.
+`check_grid: false` turns the check off.
+
+**eccodes** is imported when the source is bound: without it the check fails once, with the install
+hint.
+
 ## Derived variables and forcings
 
 Some dataset variables are not a GRIB field. spot-bee reports them as "not comparable" (INFO), not
@@ -206,8 +224,8 @@ Options for later:
 - **Not compared with the source:** constant fields (stats-bee's `constant_fields` only checks that
   they don't change in time, not that they are the right field), derived fields and computed
   forcings, and the coordinates (`latitudes`, `longitudes`).
-- **Grid order is trusted.** Only the number of grid points is checked; a source in another order
-  shows up as "differ" everywhere, not as a mapping error.
+- **Grid order is trusted on unstructured and rotated grids.** There only the number of grid points is
+  checked; a source in another order shows up as "differ" everywhere, not as a mapping error.
 - **The mapping comes from the dataset's own `variables_metadata`.** A fault that changes both the
   metadata and the data the same way is not seen; overrides in the spec avoid this for the
   variables they list.
@@ -226,7 +244,7 @@ info    spot.matches_source: not comparable with source: computed forcing [insol
 info    spot.matches_source: spot summary: 95 identical, 0 within tolerance, 0 differ, 19 not comparable, 0 unavailable (22 dates × 10000 points)
 ```
 
-All 95 GRIB variables are bit-identical, and the run takes 40 s. The 19 not comparable are 9
+All 95 GRIB variables are bit-identical, and the run takes about 10 s. The 19 not comparable are 9
 constants, 9 forcings and `TOT_PREC_6H`.
 
 On the faulty variants, spot-bee finds every value fault of a GRIB variable at the faulty date:

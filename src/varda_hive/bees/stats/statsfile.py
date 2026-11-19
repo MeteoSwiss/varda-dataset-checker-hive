@@ -39,7 +39,7 @@ from ... import __version__
 from ...honeycomb import Dataset, Finding, Spec, error, info, warning
 from ...honeycomb.dataset import STATISTICS
 from ...honeycomb.files import read_file, save_file
-from ...honeycomb.sampling import random_time_indices, sample_points
+from ...honeycomb.sampling import sample_points, sampled_dates
 
 FORMAT = "varda-hive-stats/4"
 # Per-date summary of one variable: mean/stdev (and n_finite, their weight) on the sampled points,
@@ -143,10 +143,8 @@ def sample_indices(ds: Dataset, spec: Spec, dates_from: dict | None = None) -> t
         missing = [d for d, _ in wanted if d not in position]
         picked = {position[d]: r for d, r in wanted if d in position}
     else:
-        n_times = len(ds.dates)
         missing = [date_strs[t] for t in spec.sampling.include_dates if t in excluded]
-        picked = {t: False for t in spec.sampling.include_dates if 0 <= t < n_times and t not in excluded}
-        picked |= {t: True for t in random_time_indices(n_times, spec.sampling, stratified=True, exclude=excluded)}
+        picked = sampled_dates(len(ds.dates), spec.sampling, exclude=excluded)
     return {t: r and window[0] <= t < window[1] for t, r in picked.items()}, missing
 
 

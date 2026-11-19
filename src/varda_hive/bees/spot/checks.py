@@ -16,19 +16,44 @@ from ...honeycomb.spec import Tolerances
 
 
 @dataclass
-class _Tally:
+class _Tally:  # pylint: disable=too-many-instance-attributes
     """Comparison counts of one variable over all sampled dates."""
     compared: int = 0
     identical: int = 0
     differ: int = 0
     max_abs_diff: float = 0.0
     dates_differ: list[str] = field(default_factory=list)
+    # Of the differing dates: one entry per date, and the totals reported in the variable's ERROR.
+    per_date: list[dict[str, Any]] = field(default_factory=list)
+    n_nan_mismatch: int = 0
+    max_abs_diff_differ: float | None = None
+    first_points: list[int] = field(default_factory=list)  # of the first differing date
+    members: set[int] = field(default_factory=set)
 
     @property
     def status(self) -> str:
         if self.differ:
             return "differ"
         return "identical" if self.identical == self.compared else "within_tolerance"
+
+    def error(self, name: str, n_dates: int, n_members: int) -> Finding:
+        """The one ERROR of a differing variable: totals, with the dates in `details`."""
+        details: dict[str, Any] = {
+            "n_differ": self.differ,
+            "n_compared": self.compared,
+            "n_nan_mismatch": self.n_nan_mismatch,
+            "max_abs_diff": self.max_abs_diff_differ,
+            "first_points": self.first_points,
+            "dates": self.per_date,
+        }
+        if n_members > 1:
+            details["members"] = sorted(self.members)
+        return error(
+            f"{self.differ}/{self.compared} sampled values differ from source on "
+            f"{len(self.dates_differ)}/{n_dates} dates",
+            variable=name,
+            time=self.dates_differ[0],  # the first; all of them in details["dates"]
+            details=details)
 
 
 @dataclass
@@ -60,9 +85,7 @@ class _SpotRun:  # pylint: disable=too-many-instance-attributes
                 actual = step[i][:, self.points]
                 # Compare in the dataset's precision: a float64 source equal to the stored float32 is identical.
                 expected = expected[:, self.points].astype(actual.dtype, copy=False)
-                finding = self._compare(name, actual, expected, when)
-                if finding is not None:
-                    yield error(finding[0], variable=name, time=when, details=finding[1] | {"time_index": int(t)})
+                self._compare(name, actual, expected, when, t)
 
     def _fetch(self, name: str, date: np.datetime64, when: str) -> np.ndarray | Finding | None:
         """The source field as (ensemble, grid), None if the source has none, or the ERROR of a failure."""
@@ -84,8 +107,9 @@ class _SpotRun:  # pylint: disable=too-many-instance-attributes
             return error(self.failed[name], variable=name, time=when)
         return expected
 
-    def _compare(self, name: str, actual: np.ndarray, expected: np.ndarray, when: str) -> tuple[str, dict] | None:
-        """Add one (variable, date) to its tally; the message and details of an ERROR if any value differs."""
+    def _compare(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
+            self, name: str, actual: np.ndarray, expected: np.ndarray, when: str, t: int) -> None:
+        """Add one (variable, date) to its tally, with the details of the date if any value differs."""
         rtol, atol = self.tolerances.source_tolerance(name)
         tally = self.tallies.setdefault(name, _Tally())
         a_nan, e_nan = np.isnan(actual), np.isnan(expected)
@@ -95,19 +119,18 @@ class _SpotRun:  # pylint: disable=too-many-instance-attributes
         tally.max_abs_diff = max(tally.max_abs_diff, max_diff or 0.0)
         bad = ~np.isclose(actual, expected, rtol=rtol, atol=atol, equal_nan=True)
         if not bad.any():
-            return None
-        tally.differ += int(bad.sum())
-        tally.dates_differ.append(when)
+            return
+        n_bad = int(bad.sum())
         members, cols = np.nonzero(bad)
-        details: dict[str, Any] = {
-            "n_differ": int(bad.sum()),
-            "n_nan_mismatch": int((a_nan != e_nan).sum()),
-            "max_abs_diff": max_diff,
-            "first_points": self.points[np.unique(cols)][:10].tolist(),
-        }
-        if actual.shape[0] > 1:
-            details["members"] = sorted(set(members.tolist()))
-        return f"{int(bad.sum())}/{actual.size} sampled values differ from source", details
+        tally.differ += n_bad
+        tally.dates_differ.append(when)
+        tally.n_nan_mismatch += int((a_nan != e_nan).sum())
+        if max_diff is not None:
+            tally.max_abs_diff_differ = max(tally.max_abs_diff_differ or 0.0, max_diff)
+        if not tally.first_points:
+            tally.first_points = self.points[np.unique(cols)][:10].tolist()
+        tally.members |= set(members.tolist())
+        tally.per_date.append({"time": when, "time_index": int(t), "n_differ": n_bad, "max_abs_diff": max_diff})
 
     def summary(self, n_dates: int) -> Finding:
         """One INFO finding: which variables are identical to the source, within tolerance, differ, or were
@@ -178,6 +201,9 @@ def matches_source(ctx: CheckContext) -> Iterator[Finding]:
     times = sample_time_indices(len(ds.dates), ctx.spec.sampling, exclude=ds.missing_indices)
     for t in times:
         yield from spot.compare_step(ds, t)
+    for name, tally in spot.tallies.items():
+        if tally.differ:
+            yield tally.error(name, len(times), spot.shape[0])
     for name, dates in spot.unavailable.items():
         if name not in spot.tallies and name not in spot.failed:
             # Never found: a wrong mapping, root or date format looks exactly like this.
