@@ -39,7 +39,8 @@ def test_bee_runs_without_the_others(bee: str, dataset_path: Path) -> None:
 
 def test_spot_with_grib_source_runs_without_the_others(dataset_path: Path, tmp_path: Path) -> None:
     """spot-bee with a source plug-in from varda_hive.sources loads it, and still no other bee. The index is
-    empty, so nothing is decoded and eccodes is not needed."""
+    empty, so nothing is decoded, but binding the source imports eccodes."""
+    pytest.importorskip("eccodes")
     with sqlite3.connect(tmp_path / "index.db") as con:
         con.execute("CREATE TABLE paths (id INTEGER PRIMARY KEY, path TEXT)")
         con.execute("CREATE TABLE grib_index (_id INTEGER PRIMARY KEY, _path_id INTEGER, _offset INTEGER, "
@@ -56,3 +57,4 @@ def test_spot_with_grib_source_runs_without_the_others(dataset_path: Path, tmp_p
         text=True,
         check=False)
     assert result.returncode == 0, result.stderr[-2000:]
+    assert "check crashed" not in result.stdout, result.stdout[-2000:]  # exit 1 alone could hide a crash

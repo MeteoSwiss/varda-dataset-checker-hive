@@ -166,6 +166,17 @@ def test_spot_per_variable_tolerance(dataset_path, tmp_path):
     assert list(_spot_summary(dataset_path, spec).details["within_tolerance"]) == ["T_2M"]
 
 
+def test_spot_infinite_difference_is_valid_json(dataset_path, tmp_path):
+    """An infinite value against a finite source is reported as "inf", so the JSON report stays valid."""
+    reference = build_dataset(tmp_path / "reference.zarr")
+    zarr.open_group(str(dataset_path), mode="r+")["data"][2, 1, 0, 3] = np.inf
+    spec = _zarr_source_spec(reference, n_dates="all")
+    report = run(CheckContext(Dataset(dataset_path), spec), bees=["spot"])
+    [err] = [f for f in report.findings if f.severity == Severity.ERROR]
+    assert err.details["max_abs_diff"] == "inf" and err.details["dates"][0]["max_abs_diff"] == "inf"
+    json.dumps(report.to_dict(), allow_nan=False)  # raises on NaN/Infinity
+
+
 def test_spot_samples_same_dates_as_stats(dataset_path, tmp_path):
     from varda_hive.bees.stats.statsfile import sample_indices  # pylint: disable=import-outside-toplevel
     from varda_hive.honeycomb.sampling import sample_time_indices  # pylint: disable=import-outside-toplevel

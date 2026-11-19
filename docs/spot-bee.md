@@ -23,9 +23,9 @@ Findings of `matches_source`:
 
 | severity | when |
 |---|---|
-| ERROR | values of a variable differ from the source: one finding per variable, at its first differing date, with the totals `n_differ`, `n_nan_mismatch`, `max_abs_diff`, the first differing grid points, for ensembles the members, and in `dates` each differing date with its `n_differ` and `max_abs_diff` |
+| ERROR | values of a variable differ from the source: one finding per variable, at its first differing date, with the totals `n_differ`, `n_nan_mismatch`, `max_abs_diff` (`"inf"` if one side is infinite), the first differing grid points, for ensembles the members (dataset member positions 0, 1, ..., not the source's numbering, e.g. GRIB `number`), and in `dates` each differing date with its `n_differ` and `max_abs_diff` |
 | ERROR | the source failed for a variable (e.g. two GRIB messages match, wrong grid size or coordinates, a bad override): once per variable, which is then not compared further; the summary lists the dates skipped after it |
-| ERROR | the source has no data for a variable on any sampled date: usually a wrong mapping, `root` or date format; add the variable to the source's `skip` if the source really lacks it |
+| ERROR | the source has no data for a variable on any sampled date: usually a wrong mapping, `root` or date format. If the source really lacks it, add it to `GribIndexSource`'s `skip`, or, for any plug-in, to `ignore_warnings: {matches_source: [VAR]}`, which keeps it a WARNING demoted to INFO |
 | WARNING | the source has no data for a variable on some sampled dates, with the dates |
 | INFO | a variable is not comparable with the source, with the reason (see [derived variables](#derived-variables-and-forcings)) |
 | INFO, skipped | no sampled value was compared at all (every variable not comparable, unavailable or failed): fails under `--strict` |
@@ -39,7 +39,9 @@ cast to the dataset dtype (float32) first, so a GRIB value decoded as float64 th
 unchanged is identical. **Within tolerance** means `|dataset - source| <= source_atol + source_rtol *
 |source|` everywhere, and NaN in both counts as equal. The default `source_atol` is 0: an absolute
 default would hide faults in fields with small values (kg/kg, m). Give a variable its own `atol` when
-its source values near zero are rescaled, e.g. a precipitation in m from mm.
+its source values near zero are rescaled or shifted: a precipitation in m from mm, or a temperature
+in °C from K (`offset: -273.15`), where float32 rounding of the offset is about 1e-5 at values near 0,
+so give it e.g. `atol: 1.0e-4`.
 
 A rescaled variable (`scale`, `offset`) is often "within tolerance" rather than "identical": the
 source applies the factor in float64, the dataset build may have applied it in float32, and the two
@@ -141,6 +143,10 @@ source:
 | `levtype: pl` | `shortName = param`, `level = levelist`, `typeOfLevel = pl_type_of_level` (an ERROR without `levelist`) |
 | any other | `shortName = param`, and `level = levelist` if `levelist` is set and the index has a `level` column |
 
+The `level` match of non-`pl` variables assumes the index writes `level` like mars writes `levelist`.
+Where it does not (soil depths, scaled levels), the variable is "not available on any sampled date";
+give it an override with the right `match`, as `W_SO` above.
+
 An override gives:
 
 | key | meaning | default |
@@ -168,8 +174,10 @@ are text, so write numbers the way the index stores them (`"0.01"`, `850`).
 - a message whose `numberOfDataPoints` differs from the dataset grid
 
 **Ensembles:** with several ensemble members, `number` is matched as well: 0, 1, ... by default, or
-the numbers listed in `members` (e.g. `[1, 2, 3]` for a dataset without the control member). Every
-index a variable uses needs a `number` column.
+the numbers listed in `members` (e.g. `[1, 2, 3]` for a dataset without the control member). With
+`members`, `number` is matched for a single-member dataset too, e.g. `members: [5]` for a dataset
+built from one member of an ensemble archive. Every index a variable uses then needs a `number`
+column.
 
 GRIB values are returned in the order of the message. That is the dataset grid order for an
 unstructured ICON grid read with anemoi's `grid_definition: icon`, which keeps the GRIB order. A

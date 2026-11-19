@@ -28,7 +28,8 @@ and from the spec args where that is not enough (renamed or rescaled fields, oth
           W_SO: {index: fg, match: {shortName: W_SO, "level:d": "0.01"}}
           TOT_PREC_1H: {index: fg, match: {shortName: TOT_PREC}, scale: 0.001}
         skip: {TOT_PREC_6H: "6 h accumulation of TOT_PREC"}
-        members: [1, 2, 3]                 # GRIB `number` of each dataset member, default 0, 1, ...
+        members: [1, 2, 3]                 # GRIB `number` of each dataset member, default 0, 1, ... (none for
+                                           # a single member); also for one member, e.g. [5]
 
 A configuration error of one variable (unknown override key or index, a `match` column the index
 lacks, ensemble data without a `number` column) is raised by `fetch` for that variable only, so
@@ -137,8 +138,12 @@ class GribIndexSource:  # pylint: disable=too-many-instance-attributes
         self.n_members, self.n_grid = dataset.data.shape[2], dataset.data.shape[-1]
         if self.members is not None and len(self.members) != self.n_members:
             raise ValueError(f"`members` lists {len(self.members)} GRIB numbers, dataset has {self.n_members} members")
-        if self.n_members > 1:
-            self.numbers = [str(m) for m in (self.members if self.members is not None else range(self.n_members))]
+        # Match `number` when the spec names the members (also one member, e.g. a dataset of EPS member 5)
+        # or the dataset has several.
+        if self.members is not None:
+            self.numbers = [str(m) for m in self.members]
+        elif self.n_members > 1:
+            self.numbers = [str(m) for m in range(self.n_members)]
         metadata = dataset.attrs.get("variables_metadata", {})
         self.targets = {}
         for name in dataset.variables:
@@ -185,7 +190,7 @@ class GribIndexSource:  # pylint: disable=too-many-instance-attributes
         if missing:
             raise ValueError(f"index {target.index!r} has no column {sorted(missing)}")
         if self.numbers and "number" not in columns:
-            raise ValueError(f"dataset has {self.n_members} ensemble members but index {target.index!r} "
+            raise ValueError(f"`number` is matched ({self.n_members} dataset members) but index {target.index!r} "
                              "has no `number` column")
         return target
 

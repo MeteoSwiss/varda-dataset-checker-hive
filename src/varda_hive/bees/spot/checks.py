@@ -42,12 +42,12 @@ class _Tally:  # pylint: disable=too-many-instance-attributes
             "n_differ": self.differ,
             "n_compared": self.compared,
             "n_nan_mismatch": self.n_nan_mismatch,
-            "max_abs_diff": self.max_abs_diff_differ,
+            "max_abs_diff": _json_float(self.max_abs_diff_differ),
             "first_points": self.first_points,
             "dates": self.per_date,
         }
         if n_members > 1:
-            details["members"] = sorted(self.members)
+            details["members"] = sorted(self.members)  # dataset member positions, not the source's numbering
         return error(
             f"{self.differ}/{self.compared} sampled values differ from source on "
             f"{len(self.dates_differ)}/{n_dates} dates",
@@ -130,7 +130,12 @@ class _SpotRun:  # pylint: disable=too-many-instance-attributes
         if not tally.first_points:
             tally.first_points = self.points[np.unique(cols)][:10].tolist()
         tally.members |= set(members.tolist())
-        tally.per_date.append({"time": when, "time_index": int(t), "n_differ": n_bad, "max_abs_diff": max_diff})
+        tally.per_date.append({
+            "time": when,
+            "time_index": int(t),
+            "n_differ": n_bad,
+            "max_abs_diff": _json_float(max_diff)
+        })
 
     def summary(self, n_dates: int) -> Finding:
         """One INFO finding: which variables are identical to the source, within tolerance, differ, or were
@@ -138,7 +143,7 @@ class _SpotRun:  # pylint: disable=too-many-instance-attributes
         groups: dict[str, dict[str, dict[str, Any]]] = {"identical": {}, "within_tolerance": {}, "differ": {}}
         for name, tally in self.tallies.items():
             if name not in self.failed:
-                entry: dict[str, Any] = {"max_abs_diff": tally.max_abs_diff, "compared": tally.compared}
+                entry: dict[str, Any] = {"max_abs_diff": _json_float(tally.max_abs_diff), "compared": tally.compared}
                 if tally.differ:
                     entry |= {"differ": tally.differ, "dates": tally.dates_differ}
                 groups[tally.status][name] = entry
@@ -170,6 +175,11 @@ def _as_field(fetched: Any) -> np.ndarray:
     if isinstance(fetched, np.ma.MaskedArray):
         return np.ma.filled(fetched.astype(np.float64), np.nan)
     return np.asarray(fetched, dtype=np.float64)
+
+
+def _json_float(value: float | None) -> float | str | None:
+    """A float for the report: infinities as "inf"/"-inf", which JSON has no number for."""
+    return str(value) if value is not None and np.isinf(value) else value
 
 
 def _max_abs_diff(actual: np.ndarray, expected: np.ndarray) -> float | None:
@@ -204,9 +214,11 @@ def matches_source(ctx: CheckContext) -> Iterator[Finding]:
     for name, tally in spot.tallies.items():
         if tally.differ:
             yield tally.error(name, len(times), spot.shape[0])
+    accepted = ctx.spec.ignore_warnings.get("matches_source") or []
     for name, dates in spot.unavailable.items():
-        if name not in spot.tallies and name not in spot.failed:
-            # Never found: a wrong mapping, root or date format looks exactly like this.
+        if name not in spot.tallies and name not in spot.failed and "*" not in accepted and name not in accepted:
+            # Never found: a wrong mapping, root or date format looks exactly like this. A variable the spec
+            # accepts in ignore_warnings stays a WARNING, which the runner then demotes to INFO.
             yield error(f"not available from source on any of {len(dates)} sampled dates",
                         variable=name,
                         details={"dates": dates})

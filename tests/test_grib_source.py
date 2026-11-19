@@ -443,3 +443,25 @@ def test_grib_root_relative_to_spec(archive, dataset_path, write_spec):
     findings = _findings(dataset_path, spec)
     assert [f for f in findings if f.severity != Severity.INFO] == []
     assert _summary(findings).details["identical"] == ["T_2M", "T_850", "V_10M"]
+
+
+def test_grib_members_single(archive, dataset_path):
+    """`members` matches `number` for a single-member dataset too, e.g. one member of an ensemble archive."""
+    archive.add_clean(numbers=("5", ))
+    for t in range(len(archive.dates)):  # another member in the same archive
+        archive.add(t, archive.data[t, VARIABLES.index("T_2M"), 0] + 1, shortName="T_2M", number="4")
+    findings = _findings(dataset_path, archive.spec(members=[5]))
+    assert _errors(findings) == [] and _summary(findings).details["identical"] == ["T_2M", "T_850", "V_10M"]
+    [err] = _errors(_findings(dataset_path, archive.spec()))  # without members: both messages match
+    assert err.variable == "T_2M" and "2 GRIB messages match" in err.message
+
+
+def test_grib_never_available_accepted_by_spec(archive, dataset_path):
+    """A variable the source never has is an ERROR, unless ignore_warnings accepts it."""
+    archive.add_clean(skip={("V_10M", t) for t in range(len(archive.dates))})
+    assert [f.variable for f in _errors(_findings(dataset_path, archive.spec()))] == ["V_10M"]
+    spec = archive.spec().model_copy(update={"ignore_warnings": {"matches_source": ["V_10M"]}})
+    findings = _findings(dataset_path, spec)
+    assert _errors(findings) == [] and [f for f in findings if f.severity == Severity.WARNING] == []
+    [accepted] = [f for f in findings if f.variable == "V_10M"]
+    assert accepted.message.endswith("(ignored by spec)")

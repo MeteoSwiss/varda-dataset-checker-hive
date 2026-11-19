@@ -54,7 +54,7 @@ tolerances:
   compare_atol_stdev: 0.0   # stats file vs reference: "close" within this * stdev, else "differs"
   source_rtol: 1.0e-4       # spot-bee: dataset vs source values, |diff| <= atol + rtol * |source|
   source_atol: 0.0          #   no absolute default: it would hide faults in small-valued fields
-  source_per_variable: {}   # overrides, e.g. {TOT_PREC_1H: {atol: 1.0e-6}}
+  source_per_variable: {}   # overrides, e.g. {TOT_PREC_1H: {atol: 1.0e-6}, T_2M_C: {atol: 1.0e-4}}
 
 # Accepted warnings, demoted to INFO: {check: [variables]}, "*" for all variables
 ignore_warnings:
@@ -71,7 +71,7 @@ ignore_warnings:
 #     default_index: ana                    # default: the first index
 #     variables:                            # overrides of the mapping from variables_metadata.mars
 #       TOT_PREC_1H: {index: fg, match: {shortName: TOT_PREC}, scale: 0.001}   # value * scale + offset
-#       T_2M_C: {match: {shortName: T_2M}, offset: -273.15}
+#       T_2M_C: {match: {shortName: T_2M}, offset: -273.15}   # near 0 needs an atol, see source_per_variable
 #     skip: {TOT_PREC_6H: 6 h accumulation}
 #     pl_type_of_level: isobaricInhPa       # typeOfLevel matched for levtype pl
 #     members: [0, 1, 2]                    # GRIB `number` of each ensemble member, default 0, 1, ...
