@@ -1,0 +1,479 @@
+# Copyright (c) 2026 MeteoSwiss, contributors listed in AUTHORS
+#
+# Distributed under the terms of the BSD 3-Clause License.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+"""Each template check passes on a clean dataset and fires on a broken one."""
+import json
+from pathlib import Path
+import shutil
+import warnings
+
+import numpy as np
+import pytest
+import zarr
+
+from varda_hive.cli import hive_main, meta_bee_main, stats_bee_main
+from varda_hive.honeycomb import CheckContext, Dataset, Severity, Spec, load_spec, run
+from varda_hive.bees.stats.statsfile import compute_stats, save_stats
+from varda_hive.honeycomb.sampling import sample_points
+
+from conftest import NG, NT, VARIABLES, build_dataset
+
+TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
+
+
+def _errors(path, bee, spec=None):
+    report = run(CheckContext(Dataset(path), spec or Spec()), bees=[bee])
+    return [f for f in report.findings if f.severity == Severity.ERROR]
+
+
+def test_meta_variables(dataset_path, tmp_path):
+    spec = Spec(variables=VARIABLES)
+    assert _errors(dataset_path, "meta", spec) == []
+    extra = build_dataset(tmp_path / "extra.zarr", variables=VARIABLES + ["T_2M_COPY"])
+    assert [(f.variable, f.message) for f in _errors(extra, "meta", spec)] == [("T_2M_COPY", "variable not in spec")]
+
+
+def test_meta_clean_without_spec(dataset_path):
+    """Without a spec, the consistency checks run and pass; the spec and reference checks skip."""
+    report = run(CheckContext(Dataset(dataset_path), Spec()), bees=["meta"])
+    assert all(f.severity == Severity.INFO for f in report.findings)
+    assert {f.check
+            for f in report.findings if f.skipped} == {
+                "variables_match_spec", "dates_match_spec", "grid_matches_spec", "flags_match_spec",
+                "variables_metadata_match_spec", "matches_reference"
+            }
+
+
+def test_stats_finite_values(dataset_path):
+    spec = Spec(sampling={"n_dates": 1, "include_dates": ["2020-03-01T03:00:00"]})
+    assert _errors(dataset_path, "stats", spec) == []
+    zarr.open_group(str(dataset_path), mode="r+")["data"][3, 1] = np.nan
+    [f] = _errors(dataset_path, "stats", spec)
+    assert (f.check, f.variable, f.time) == ("finite_values", "T_2M", "2020-03-01T03:00:00")
+
+
+def test_stats_inf_is_an_error_not_a_crash(dataset_path):
+    zarr.open_group(str(dataset_path), mode="r+")["data"][3, 1, 0, 0] = np.inf
+    spec = Spec(sampling={"n_dates": 1, "include_dates": ["2020-03-01T03:00:00"]})
+    [f] = _errors(dataset_path, "stats", spec)
+    assert (f.check, f.message, f.variable) == ("finite_values", "1 infinite values", "T_2M")
+    # allow_nans does not allow inf
+    attrs = json.loads((dataset_path / ".zattrs").read_text())
+    (dataset_path / ".zattrs").write_text(json.dumps(attrs | {"allow_nans": True}))
+    assert [f.check for f in _errors(dataset_path, "stats", spec)] == ["finite_values"]
+
+
+def test_stats_zero_sampling_error_does_not_crash(dataset_path):
+    """FIS is identical on every date (se_mean = 0); a stored mean off by a little must not crash."""
+    zarr.open_group(str(dataset_path), mode="r+")["mean"][0] += 0.1  # above rounding, below the ERROR bound
+    report = run(CheckContext(Dataset(dataset_path), Spec(sampling={"n_dates": 4})),
+                 bees=["stats"],
+                 select=["statistics_consistent"])
+    assert not any("crashed" in f.message for f in report.findings)
+    assert any(f.variable == "FIS" and f.severity >= Severity.WARNING for f in report.findings)
+
+
+def test_stats_missing_dates_are_not_sampled(dataset_path):
+    attrs = json.loads((dataset_path / ".zattrs").read_text())
+    attrs["missing_dates"] = ["2020-03-01T03:00:00", "2020-03-01T05:00:00"]
+    (dataset_path / ".zattrs").write_text(json.dumps(attrs))
+    zarr.open_group(str(dataset_path), mode="r+")["data"][[3, 5]] = np.nan  # what anemoi leaves there
+    spec = Spec(sampling={"n_dates": "all", "include_dates": ["2020-03-01T03:00:00"]})
+    assert Dataset(dataset_path).missing_indices == {3, 5}
+    stats = compute_stats(Dataset(dataset_path), spec)
+    assert "2020-03-01T03:00:00" not in stats["sampling"]["dates"]
+    assert "2020-03-01T05:00:00" not in stats["sampling"]["dates"]
+    assert stats["sampling"]["n_window"] == NT - 2 and stats["sampling"]["missing_dates"] == ["2020-03-01T03:00:00"]
+    for seed in range(5):
+        spec = Spec(sampling={"n_dates": 4, "seed": seed})
+        assert [f for f in _errors(dataset_path, "stats", spec) if f.check == "finite_values"] == []
+
+
+@pytest.mark.parametrize("attrs, message", [
+    ({
+        "statistics_end_date": "2020-03-02T00:00:00"
+    }, "statistics_end_date 2020-03-02T00:00:00 outside"),
+    ({
+        "statistics_start_date": "2020-03-01T05:00:00",
+        "statistics_end_date": "2020-03-01T02:00:00"
+    }, "statistics_start_date 2020-03-01T05:00:00 after"),
+])
+def test_stats_statistics_window_valid(dataset_path, attrs, message):
+    assert _stats_findings(dataset_path, Spec(), "statistics_window_valid") == []
+    path = dataset_path / ".zattrs"
+    path.write_text(json.dumps(json.loads(path.read_text()) | attrs))
+    [f] = _stats_findings(dataset_path, Spec(), "statistics_window_valid")
+    assert f.message.startswith(message)
+
+
+def test_ignore_warnings(dataset_path):
+    attrs = json.loads((dataset_path / ".zattrs").read_text())
+    attrs["constant_fields"] = []
+    (dataset_path / ".zattrs").write_text(json.dumps(attrs))
+    spec = Spec(sampling={"n_dates": 3})
+    assert [w.variable for w in _stats_findings(dataset_path, spec, "constant_fields", Severity.WARNING)] == ["FIS"]
+    spec = Spec(sampling={"n_dates": 3}, ignore_warnings={"constant_fields": ["FIS"]})
+    assert _stats_findings(dataset_path, spec, "constant_fields", Severity.WARNING) == []
+    assert any(
+        f.message.endswith("(ignored by spec)")
+        for f in _stats_findings(dataset_path, spec, "constant_fields", Severity.INFO))
+
+
+def _zarr_source_spec(reference: Path, **sampling) -> Spec:
+    return Spec(source={
+        "plugin": "source_plugin_example.py:ZarrSource",
+        "args": {
+            "path": str(reference)
+        }
+    },
+                sampling=sampling,
+                base_dir=TEMPLATES)
+
+
+def _spot_summary(path, spec):
+    report = run(CheckContext(Dataset(path), spec), bees=["spot"])
+    [summary] = [f for f in report.findings if f.message.startswith("spot summary")]
+    return summary
+
+
+def test_spot_matches_source(dataset_path, tmp_path):
+    reference = build_dataset(tmp_path / "reference.zarr")  # identical copy
+    spec = _zarr_source_spec(reference, n_dates=2, include_dates=["2020-03-01T05:00:00"])
+    assert _errors(dataset_path, "spot", spec) == []
+    assert _spot_summary(dataset_path, spec).details["identical"] == VARIABLES
+    zarr.open_group(str(dataset_path), mode="r+")["data"][5, 3] += 1.0
+    [f] = _errors(dataset_path, "spot", spec)
+    assert (f.variable, f.time) == ("U_10M", "2020-03-01T05:00:00")
+    assert list(_spot_summary(dataset_path, spec).details["differ"]) == ["U_10M"]
+
+
+def test_spot_per_variable_tolerance(dataset_path, tmp_path):
+    reference = build_dataset(tmp_path / "reference.zarr")
+    zarr.open_group(str(dataset_path), mode="r+")["data"][:, 1] += 0.1  # T_2M off by 0.1, more than rtol * 280 K
+    spec = _zarr_source_spec(reference, n_dates="all")
+    [err] = _errors(dataset_path, "spot", spec)  # one ERROR per variable, however many dates differ
+    assert err.variable == "T_2M" and err.message == f"{NT * NG}/{NT * NG} sampled values differ from source on {NT}/{NT} dates"
+    assert err.time == "2020-03-01T00:00:00" and len(err.details["dates"]) == NT
+    spec = spec.model_copy(
+        update={"tolerances": Spec(tolerances={
+            "source_per_variable": {
+                "T_2M": {
+                    "atol": 0.2
+                }
+            }
+        }).tolerances})
+    assert _errors(dataset_path, "spot", spec) == []
+    assert list(_spot_summary(dataset_path, spec).details["within_tolerance"]) == ["T_2M"]
+
+
+def test_spot_infinite_difference_is_valid_json(dataset_path, tmp_path):
+    """An infinite value against a finite source is reported as "inf", so the JSON report stays valid."""
+    reference = build_dataset(tmp_path / "reference.zarr")
+    zarr.open_group(str(dataset_path), mode="r+")["data"][2, 1, 0, 3] = np.inf
+    spec = _zarr_source_spec(reference, n_dates="all")
+    report = run(CheckContext(Dataset(dataset_path), spec), bees=["spot"])
+    [err] = [f for f in report.findings if f.severity == Severity.ERROR]
+    assert err.details["max_abs_diff"] == "inf" and err.details["dates"][0]["max_abs_diff"] == "inf"
+    json.dumps(report.to_dict(), allow_nan=False)  # raises on NaN/Infinity
+
+
+def test_spot_samples_same_dates_as_stats(dataset_path, tmp_path):
+    from varda_hive.bees.stats.statsfile import sample_indices  # pylint: disable=import-outside-toplevel
+    from varda_hive.honeycomb.sampling import sample_time_indices  # pylint: disable=import-outside-toplevel
+    spec = Spec(sampling={"n_dates": 3, "include_dates": ["2020-03-01T06:00:00"], "seed": 3})
+    ds = Dataset(dataset_path)
+    picked, _ = sample_indices(ds, spec)
+    assert sample_time_indices(spec, ds.dates, ds.missing_indices) == sorted(picked)
+
+
+def test_spot_not_comparable_and_ensemble(dataset_path, tmp_path):
+    """A plug-in raising NotComparable gives one INFO; every ensemble member is compared."""
+    group = zarr.open_group(str(dataset_path), mode="r+")
+    two = np.concatenate([group["data"][:]] * 2, axis=2)
+    group.create_array("data", data=two, chunks=(1, len(VARIABLES), 2, NG), overwrite=True)
+    (tmp_path / "ens_source.py").write_text(
+        "import numpy as np\n"
+        "from varda_hive.honeycomb import Dataset, NotComparable\n"
+        "class S:\n"
+        "    def __init__(self, path):\n        self.ds = Dataset(path)\n"
+        "    def fetch(self, variable, date):\n"
+        "        if variable == 'FIS':\n            raise NotComparable('from another file')\n"
+        "        t = list(self.ds.dates).index(date)\n"
+        "        return self.ds.data[t, self.ds.index(variable)]\n")
+    reference = tmp_path / "reference.zarr"
+    shutil.copytree(dataset_path, reference)
+    spec = Spec(source={
+        "plugin": "ens_source.py:S",
+        "args": {
+            "path": str(reference)
+        }
+    },
+                sampling={"n_dates": "all"},
+                base_dir=tmp_path)
+    assert _errors(dataset_path, "spot", spec) == []
+    summary = _spot_summary(dataset_path, spec)
+    assert summary.details["not_comparable"] == {"FIS": "from another file"}
+    assert summary.details["n_members"] == 2 and "× 2 members" in summary.message
+    group["data"][3, 2, 1, 4] += 1.0  # member 1 only
+    [f] = _errors(dataset_path, "spot", spec)
+    assert (f.variable, f.details["members"], f.details["first_points"]) == ("T_850", [1], [4])
+
+
+def test_spot_template_zarr_source_ensemble(dataset_path, tmp_path):
+    """The template plug-in returns (ensemble, grid), resolves a relative path against the spec and reports
+    a variable the reference lacks as not comparable."""
+    group = zarr.open_group(str(dataset_path), mode="r+")
+    two = np.concatenate([group["data"][:]] * 2, axis=2)
+    group.create_array("data", data=two, chunks=(1, len(VARIABLES), 2, NG), overwrite=True)
+    reference = tmp_path / "spec_dir" / "reference.zarr"
+    shutil.copytree(dataset_path, reference)
+    attrs = json.loads((reference / ".zattrs").read_text())
+    attrs["variables"] = VARIABLES[:-1]  # V_10M not in the reference
+    (reference / ".zattrs").write_text(json.dumps(attrs))
+    spec = Spec(source={
+        "plugin": f"{TEMPLATES}/source_plugin_example.py:ZarrSource",
+        "args": {
+            "path": "reference.zarr"
+        }
+    },
+                sampling={"n_dates": 3},
+                base_dir=tmp_path / "spec_dir")
+    assert _errors(dataset_path, "spot", spec) == []
+    summary = _spot_summary(dataset_path, spec)
+    assert summary.details["identical"] == VARIABLES[:-1] and summary.details["n_members"] == 2
+    assert summary.details["not_comparable"] == {"V_10M": "not in the reference dataset"}
+
+
+def test_spot_source_shape_and_failure(dataset_path, tmp_path):
+    (tmp_path / "bad_source.py").write_text("import numpy as np\n"
+                                            "class S:\n"
+                                            "    def fetch(self, variable, date):\n"
+                                            "        if variable == 'T_2M':\n            raise OSError('disk gone')\n"
+                                            "        if variable == 'U_10M':\n            return None\n"
+                                            "        return np.zeros(7)\n")
+    spec = Spec(source={"plugin": "bad_source.py:S"}, sampling={"n_dates": 3}, base_dir=tmp_path)
+    report = run(CheckContext(Dataset(dataset_path), spec), bees=["spot"])
+    errors = [f for f in report.findings if f.severity == Severity.ERROR]
+    assert sorted(f.variable for f in errors) == ["FIS", "T_2M", "T_850", "U_10M", "V_10M"]  # once per variable
+    assert any("disk gone" in f.message for f in errors)
+    [never] = [f for f in errors if f.variable == "U_10M"]  # unavailable on every date: likely a wrong mapping
+    assert never.message == "not available from source on any of 3 sampled dates"
+    assert [f.message for f in report.findings
+            if f.skipped] == ["skipped: no sampled value was compared with the source"]
+    summary = _spot_summary(dataset_path, spec)
+    assert len(summary.details["failed"]) == 4 and summary.details["unavailable"] == {"U_10M": never.details["dates"]}
+    assert len(summary.details["not_compared_after_failure"]["T_2M"]) == 2  # the dates after the first failure
+
+
+def test_cli(dataset_path, write_spec, capsys):
+    spec = write_spec("variables: [T_2M]\n")
+    assert meta_bee_main(["check", str(dataset_path), "--spec", str(spec)]) == 1
+    assert "variable not in spec" in capsys.readouterr().out
+    assert hive_main([str(dataset_path), "--format", "json"]) == 0
+    capsys.readouterr()
+    assert hive_main(["--list"]) == 0
+    listing = capsys.readouterr().out.splitlines()
+    assert [line.split()[0] for line in listing if not line.startswith(" ")] == ["meta-bee", "stats-bee", "spot-bee"]
+    assert "  finite_values " in "\n".join(listing)
+    assert stats_bee_main(["check", "--list"]) == 0
+    assert [line for line in capsys.readouterr().out.splitlines() if not line.startswith(" ")] == \
+        ["stats-bee  values and statistics"]
+    with pytest.raises(SystemExit) as exit_info:  # the subcommand is required
+        stats_bee_main([])
+    assert exit_info.value.code == 2
+
+
+def _stats_findings(path, spec, select, severity=Severity.ERROR):
+    report = run(CheckContext(Dataset(path), spec), bees=["stats"], select=[select])
+    return [f for f in report.findings if f.severity == severity]
+
+
+def test_stats_statistics_consistent(dataset_path):
+    spec = Spec(sampling={"n_dates": 4})
+    assert _stats_findings(dataset_path, spec, "statistics_consistent") == []
+    root = zarr.open_group(str(dataset_path), mode="r+")
+    root["mean"][2] *= 1.5
+    root["stdev"][3] = 0.0
+    root["minimum"][4], root["maximum"][4] = root["maximum"][4], root["minimum"][4]
+    flagged = {(f.variable, f.message.split()[1]) for f in _stats_findings(dataset_path, spec, "statistics_consistent")}
+    assert ("T_850", "mean") in flagged
+    assert ("U_10M", "stdev") in flagged
+    assert ("V_10M", "statistics") in flagged  # minimum > maximum
+
+
+def test_stats_statistics_consistent_exact(dataset_path):
+    spec = Spec(sampling={"n_dates": "all"})
+    assert _stats_findings(dataset_path, spec, "statistics_consistent") == []
+    zarr.open_group(str(dataset_path), mode="r+")["mean"][1] *= 1.0001  # far below any sampling error
+    [f] = _stats_findings(dataset_path, spec, "statistics_consistent")
+    assert f.variable == "T_2M" and f.details["exact"]
+
+
+def test_stats_spike_outside_the_point_subset(dataset_path, write_spec):
+    spec = load_spec(
+        write_spec("variables: {T_2M: {min: 200.0, max: 330.0, units: K}}\n"
+                   "sampling: {n_dates: 1, n_points: 5, include_dates: [2020-03-01T06:00:00]}\n"))
+    outside = int(np.setdiff1d(np.arange(NG), sample_points(NG, spec.sampling))[0])
+    data = zarr.open_group(str(dataset_path), mode="r+")["data"]
+    data[6, 1, 0, outside] = 400.0
+    data[6, 2, 0, outside] = np.inf
+    found = {(f.check, f.variable, f.time) for f in _errors(dataset_path, "stats", spec)}
+    assert {("physical_ranges", "T_2M", "2020-03-01T06:00:00"),
+            ("finite_values", "T_850", "2020-03-01T06:00:00")} <= found
+    # the stored maximum doesn't include the spike either
+    assert ("statistics_consistent", "T_2M", None) in found
+
+
+def test_stats_physical_ranges(dataset_path, write_spec):
+    spec = load_spec(
+        write_spec("variables: {T_2M: {min: 200.0, max: 330.0, units: K}, U_10M: {units: m s-1}}\n"
+                   "sampling: {n_dates: 1, include_dates: [2020-03-01T06:00:00]}\n"))
+    assert _stats_findings(dataset_path, spec, "physical_ranges") == []
+    zarr.open_group(str(dataset_path), mode="r+")["data"][6, 1, 0, 0] = 400.0
+    [f] = _stats_findings(dataset_path, spec, "physical_ranges")
+    assert (f.variable, f.time) == ("T_2M", "2020-03-01T06:00:00")
+
+
+def test_stats_constant_fields(dataset_path):
+    spec = Spec(sampling={"n_dates": "all"})
+    assert _stats_findings(dataset_path, spec, "constant_fields", Severity.WARNING) == []
+    assert _stats_findings(dataset_path, spec, "constant_fields") == []
+    data = zarr.open_group(str(dataset_path), mode="r+")["data"]
+    data[2, 0] += 1.0  # constant field FIS changes
+    data[3, 2] = 0.0  # T_850 zeroed
+    [f] = _stats_findings(dataset_path, spec, "constant_fields")
+    assert f.variable == "FIS" and f.details["dates"] == ["2020-03-01T02:00:00"]
+    [w] = _stats_findings(dataset_path, spec, "constant_fields", Severity.WARNING)
+    assert (w.variable, w.time) == ("T_850", "2020-03-01T03:00:00")
+
+
+def test_stats_constant_field_all_nan_date_is_not_a_change(dataset_path):
+    """An all-NaN date is a finite_values ERROR, not a change of the constant field FIS."""
+    zarr.open_group(str(dataset_path), mode="r+")["data"][3] = np.nan
+    spec = Spec(sampling={"n_dates": "all"})
+    assert _stats_findings(dataset_path, spec, "constant_fields") == []
+    assert {f.variable for f in _stats_findings(dataset_path, spec, "finite_values")} == set(VARIABLES)
+
+
+def test_stats_constant_field_not_listed(dataset_path):
+    attrs = json.loads((dataset_path / ".zattrs").read_text())
+    attrs["constant_fields"] = []
+    (dataset_path / ".zattrs").write_text(json.dumps(attrs))
+    [w] = _stats_findings(dataset_path, Spec(sampling={"n_dates": 3}), "constant_fields", Severity.WARNING)
+    assert w.variable == "FIS"
+
+
+def test_stats_matches_reference_stats(dataset_path, tmp_path, write_spec):
+    # the reference of the same spec: the same sample
+    save_stats(compute_stats(Dataset(dataset_path), Spec(sampling={"n_dates": 1, "seed": 7})), tmp_path / "ref.json")
+    spec = load_spec(write_spec("reference: ref.json\nsampling: {n_dates: 1, seed: 7}\n"))
+    assert _stats_findings(dataset_path, spec, "matches_reference_stats") == []
+    zarr.open_group(str(dataset_path), mode="r+")["data"][:, 3] *= 2
+    assert {f.variable for f in _stats_findings(dataset_path, spec, "matches_reference_stats")} == {"U_10M"}
+
+
+# --- allow_nans as a list of variables ----------------------------------------------------------
+
+
+def _with_nans(path: Path, nans: dict[str, slice | int], allow_nans) -> None:
+    """Put NaNs into variables {name: time indices}, store nan-aware statistics as anemoi does, and set
+    the dataset's `allow_nans`."""
+    root = zarr.open_group(str(path), mode="r+")
+    data = root["data"][:]
+    for name, t in nans.items():
+        if isinstance(t, slice):
+            data[t, VARIABLES.index(name)] = np.nan
+        else:
+            data[t, VARIABLES.index(name), 0, ::3] = np.nan
+    root["data"][:] = data
+    v = data.astype("f8")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # an all-NaN variable: NaN statistics
+        root["mean"][:] = np.nanmean(v, axis=(0, 2, 3))
+        root["stdev"][:] = np.nanstd(v, axis=(0, 2, 3))
+        root["minimum"][:] = np.nanmin(v, axis=(0, 2, 3))
+        root["maximum"][:] = np.nanmax(v, axis=(0, 2, 3))
+    attrs = json.loads((path / ".zattrs").read_text())
+    (path / ".zattrs").write_text(json.dumps(attrs | {"allow_nans": allow_nans}))
+
+
+NAN_SPEC = "sampling: {n_dates: all, n_points: all}\n"
+
+
+def test_stats_nans_allowed_in_listed_variables(dataset_path, write_spec):
+    _with_nans(dataset_path, {"T_2M": 3}, ["T_2M"])
+    spec = load_spec(write_spec(NAN_SPEC + "allow_nans: [T_2M]\n"))
+    assert _errors(dataset_path, "stats", spec) == []
+    assert _errors(dataset_path, "meta", spec) == []
+    infos = [
+        f for f in run(CheckContext(Dataset(dataset_path), spec), bees=["stats"]).findings if f.check == "finite_values"
+    ]
+    assert [f.message for f in infos] == ["NaNs allowed in 1 variables"]
+
+
+def test_stats_nans_in_a_variable_not_listed(dataset_path, write_spec):
+    _with_nans(dataset_path, {"T_2M": 3, "U_10M": 5}, ["T_2M"])
+    spec = load_spec(write_spec(NAN_SPEC + "allow_nans: [T_2M]\n"))
+    assert {(f.check, f.variable, f.time)
+            for f in _errors(dataset_path, "stats", spec)} == {("finite_values", "U_10M", "2020-03-01T05:00:00")}
+    # the dataset's list wins over the spec's: with U_10M listed by the dataset, only meta-bee complains
+    _with_nans(dataset_path, {"T_2M": 3, "U_10M": 5}, ["T_2M", "U_10M"])
+    assert _errors(dataset_path, "stats", spec) == []
+    assert [(f.check, f.variable) for f in _errors(dataset_path, "meta", spec)] == [("flags_match_spec", "U_10M")]
+
+
+def test_stats_nans_allowed_but_variable_all_nan(dataset_path, write_spec):
+    """An allowed variable that is NaN everywhere has NaN stored statistics: an ERROR."""
+    _with_nans(dataset_path, {"T_2M": slice(None)}, ["T_2M"])
+    spec = load_spec(write_spec(NAN_SPEC + "allow_nans: [T_2M]\n"))
+    errors = {(f.check, f.variable, f.message) for f in _errors(dataset_path, "stats", spec)}
+    assert errors == {("statistics_consistent", "T_2M", "stored statistics contain NaN or inf")}
+
+
+def test_stats_nans_allowed_per_variable(dataset_path, write_spec):
+    """In the `variables` mapping, `allow_nans: true` on the variable; the mapping without it means no NaNs."""
+    _with_nans(dataset_path, {"T_2M": 3}, ["T_2M"])
+    entries = "variables: {FIS: {constant: true}, T_2M: {allow_nans: true}, T_850: , U_10M: , V_10M: }\n"
+    spec = load_spec(write_spec(NAN_SPEC + entries))
+    assert _errors(dataset_path, "stats", spec) == []
+    assert _errors(dataset_path, "meta", spec) == []
+    spec = load_spec(write_spec(NAN_SPEC + entries.replace("{allow_nans: true}", "")))
+    assert {(f.check, f.variable) for f in _errors(dataset_path, "meta", spec)} == {("flags_match_spec", "T_2M")}
+    # the dataset's list still decides for stats-bee; with `allow_nans: false` the spec does
+    assert _errors(dataset_path, "stats", spec) == []
+    _with_nans(dataset_path, {"T_2M": 3}, False)
+    assert {f.check for f in _errors(dataset_path, "stats", spec)} == {"finite_values"}
+
+
+def test_stats_nans_not_checked_only_for_true(dataset_path, write_spec):
+    _with_nans(dataset_path, {"U_10M": 5}, True)
+    report = run(CheckContext(Dataset(dataset_path), load_spec(write_spec(NAN_SPEC))), bees=["stats"])
+    assert "NaNs not checked: dataset allows NaNs" in {f.message for f in report.findings}
+    assert not [f for f in report.findings if f.severity == Severity.ERROR]
+    # a list in the spec is used when the dataset says only `true`
+    spec = load_spec(write_spec(NAN_SPEC + "allow_nans: [T_2M]\n"))
+    assert {(f.check, f.variable) for f in _errors(dataset_path, "stats", spec)} == {("finite_values", "U_10M")}
+
+
+@pytest.mark.parametrize("attr, spec, expected", [
+    (["A", "B"], ["B", "A"], set()),
+    ([], False, set()),
+    (False, [], set()),
+    (True, True, set()),
+    (["A", "B"], ["A", "C"], {("B", "not by the spec"), ("C", "not listed in the dataset")}),
+    (["A"], True, {(None, "list the variables")}),
+    (["A"], False, {("A", "not by the spec")}),
+    (True, ["A"], {(None, "the spec expects ['A']")}),
+])
+def test_meta_flags_allow_nans(dataset_path, attr, spec, expected):
+    attrs = json.loads((dataset_path / ".zattrs").read_text())
+    (dataset_path / ".zattrs").write_text(json.dumps(attrs | {"allow_nans": attr}))
+    findings = run(CheckContext(Dataset(dataset_path), Spec(allow_nans=spec)),
+                   bees=["meta"],
+                   select=["flags_match_spec"]).findings
+    errors = [f for f in findings if f.severity == Severity.ERROR]
+    assert len(errors) == len(expected)
+    for variable, text in expected:
+        assert any(f.variable == variable and text in f.message for f in errors), errors
