@@ -11,7 +11,7 @@ covers, and update the docs when behaviour changes.
 | what the hive is, the bees, CLI usage, exit codes | [README.md](README.md) (top, *Usage*) |
 | findings vs assertions, what belongs in the hive vs the dataset repo | [README.md#findings-not-assertions](README.md#findings-not-assertions), [README.md#what-belongs-where](README.md#what-belongs-where) |
 | spec fields | [README.md#spec-fields](README.md#spec-fields); authoritative schema: `src/varda_hive/honeycomb/spec.py`; every field with defaults: `templates/spec.example.yaml` |
-| meta-bee checks, meta files, `compare`, reference policy | [docs/meta-bee.md](docs/meta-bee.md) |
+| meta-bee checks, meta section of `ref.yaml`, `hive compare`, reference policy | [docs/meta-bee.md](docs/meta-bee.md) |
 | stats-bee sampling, stats files, tolerances, calibration, limits | [docs/stats-bee.md](docs/stats-bee.md) |
 | CI gating, `--strict`, publishing workflow, CSCS-CI job | [docs/ci.md](docs/ci.md) |
 | adding a check | [README.md#adding-a-check](README.md#adding-a-check) |
@@ -44,9 +44,12 @@ inside the FDB uenv, see `tests/test_fdb_realch1.py`. eccodes (`grib` extra) is 
 
 - `src/varda_hive/honeycomb/`: the shared core (dataset access, `Finding`/`Report`, spec, check
   registry and runner, seeded sampling, `Source` interface). Module docstrings explain each part.
-- `src/varda_hive/bees/<bee>/checks.py`: a bee's checks, registered with `@check("<bee>")`. The
-  registry imports a bee's `checks` module lazily (`honeycomb/registry.py:_load_bee`); bee-specific
-  subcommands (`dump`, `compare`, `calibrate`) live in that bee's own `cli.py`. The top-level
+- `src/varda_hive/bees/<bee>/checks.py`: a bee's checks, registered with `@check("<bee>")`, and its
+  dump (its section of `ref.yaml`), registered with `@dumps("<bee>")` and built once per run
+  (`honeycomb/registry.py:bee_dump`): a check is a dump plus a comparison with the spec and the
+  reference. The registry imports a bee's `checks` module lazily (`_load_bee`); `hive` only merges
+  the sections the bees return (`collect_dumps`). Bee-specific code for `hive compare`
+  (`compare_section`) and extra subcommands (`stats-bee calibrate`) live in that bee's own `cli.py`. The top-level
   `src/varda_hive/cli.py` docstring describes the entry points and exit codes.
 - **Bees must stay independent**: a bee may import the honeycomb but never another bee.
   `tests/test_independence.py` enforces this by running each bee with the others unimportable.

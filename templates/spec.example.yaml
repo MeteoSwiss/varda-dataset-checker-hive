@@ -42,11 +42,12 @@ bbox: {lat_min: 45.43, lat_max: 48.19, lon_min: 5.25, lon_max: 11.03, tolerance:
 missing_dates: []                            # dates the dataset may list as missing
 
 # Reference of the accepted version, for meta-bee (metadata and structure) and stats-bee
-# (statistics). Write it with `hive dump data.zarr --spec <this file> -o data.ref.yaml` and commit it
-# next to this spec. A meta file, a stats file or a zarr (meta-bee only) work too.
+# (statistics): the `ref.yaml` that `hive data.zarr --spec <this file> --out hive/` writes, copied
+# next to this spec and committed. While it does not exist, the reference checks are skipped (the
+# first reference). A zarr (meta-bee only) works too.
 reference: data.ref.yaml
 # meta-bee: change the severity of differences to the reference (globs on the dotted path, see
-# `meta-bee compare --all`). Defaults: structure ERROR, other metadata WARNING, churn ignored.
+# `hive compare --all`). Defaults: structure ERROR, other metadata WARNING, churn ignored.
 reference_policy:
   ignore: [variables_metadata.*.mars.date]   # the build date of each field
   error: []
@@ -60,10 +61,10 @@ reference_policy:
 # Seeded sampling used by stats-bee and spot-bee
 sampling:
   seed: 0
-  n_dates: 20           # random dates over the whole time range, or "all"
+  n_dates: 20           # random dates over the period (start_date..end_date), or "all"
   n_points: 10000       # grid points, or "all": stats-bee's mean/stdev per date (min/max/NaN always full
                         # domain) and the points spot-bee compares with the source
-  include_dates: []     # time indices always checked in addition
+  include_dates: []     # dates always checked in addition, e.g. [2020-03-01T06:00:00]
 
 tolerances:
   statistics_rtol: 1.0e-5   # recomputed vs stored statistics: floating-point part

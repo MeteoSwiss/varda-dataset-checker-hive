@@ -53,7 +53,7 @@ def spec():
     return Spec(sampling={
         "n_dates": 3,
         "n_points": "all",
-        "include_dates": [99, 100]
+        "include_dates": [str(d) for d in Dataset(CLEAN).dates[[99, 100]]]
     },
                 tolerances={"source_per_variable": {
                     "TOT_PREC_1H": {

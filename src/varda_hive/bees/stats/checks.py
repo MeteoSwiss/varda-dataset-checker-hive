@@ -13,7 +13,7 @@ from typing import Any, Generator, Iterator
 
 import numpy as np
 
-from ...honeycomb import CheckContext, Finding, check, error, info, skipped, warning
+from ...honeycomb import CheckContext, Finding, bee_dump, check, dumps, error, info, skipped, warning
 from ...honeycomb.dataset import is_zarr
 from ...honeycomb.files import provides
 from .calibrate import load_tolerances, mismatch
@@ -22,9 +22,10 @@ from .statsfile import FORMAT, Sample, compare_stats, compute_sample, load_stats
 
 def _reference(ctx: CheckContext) -> tuple[dict | None, str]:
     """The reference stats (a ref or stats file), or None and why there is none."""
+    if (reason := ctx.reference_missing()) is not None:
+        return None, reason
     path = ctx.reference_path
-    if path is None:
-        return None, "no reference: give `--reference` or `reference` in the spec"
+    assert path is not None
     if is_zarr(path) or not provides(path, "stats", FORMAT):
         return None, f"the reference {path} has no stats section (a zarr or a meta file?)"
     return load_stats(path), ""
@@ -32,10 +33,7 @@ def _reference(ctx: CheckContext) -> tuple[dict | None, str]:
 
 def _sample(ctx: CheckContext) -> Sample:
     if "sample" not in ctx.cache:
-        reference, ctx.cache["reference_stats_missing"] = _reference(ctx)
-        ctx.cache["reference_stats"] = reference
-        # Sample the reference's dates, so matches_reference_stats compares the same sample.
-        ctx.cache["sample"] = compute_sample(ctx.dataset, ctx.spec, dates_from=reference)
+        ctx.cache["sample"] = compute_sample(ctx.dataset, ctx.spec)
     return ctx.cache["sample"]
 
 
@@ -324,16 +322,21 @@ def constant_fields(ctx: CheckContext) -> Iterator[Finding]:
                     yield warning(f"spatially constant field (all values {vmin})", variable=name, time=date)
 
 
+@dumps("stats")
+def stats_dump(ctx: CheckContext) -> dict[str, Any]:
+    """stats-bee's section of `ref.yaml`: the stats file of the spec's sample."""
+    return stats_file(ctx.dataset, ctx.spec, _sample(ctx))
+
+
 @check("stats")
 def matches_reference_stats(ctx: CheckContext) -> Iterator[Finding]:
     """Stored and sample statistics match the reference (`--reference` or the spec's `reference`, a
-    ref or stats file), on the reference's sample.
+    ref file), on the same sample: the spec's.
 
-    Skipped without a reference. Same comparison as `stats-bee compare`.
+    Skipped without a reference. Compares the dump with the reference's stats section, as `hive compare`.
     """
-    sample, reference = _sample(ctx), ctx.cache["reference_stats"]
+    reference, why = _reference(ctx)
     if reference is None:
-        yield skipped(ctx.cache["reference_stats_missing"])
+        yield skipped(why)
         return
-    stats = stats_file(ctx.dataset, ctx.spec, sample, dates_from=reference)
-    yield from compare_stats(stats, reference, ctx.spec.tolerances.compare_atol_stdev).findings
+    yield from compare_stats(bee_dump(ctx, "stats"), reference, ctx.spec.tolerances.compare_atol_stdev).findings

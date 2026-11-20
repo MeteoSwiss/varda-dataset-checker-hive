@@ -10,7 +10,7 @@ Three groups:
 - internal consistency (no spec needed): what `anemoi-datasets validate` checks, natively and with
   precise findings, plus what it misses (frequency, date attributes, missing_dates, ...)
 - against the spec: expected variables, dates, grid, flags and per-variable metadata
-- against a reference (`matches_reference`): the same comparison as `meta-bee compare`
+- against a reference (`matches_reference`): the same comparison as `hive compare`
 """
 from dataclasses import replace
 import math
@@ -18,7 +18,7 @@ from typing import Any, Iterator
 
 import numpy as np
 
-from ...honeycomb import CheckContext, Finding, check, error, info, skipped, warning
+from ...honeycomb import CheckContext, Finding, bee_dump, check, dumps, error, info, skipped, warning
 from ...honeycomb.dataset import STATISTICS, Dataset, format_frequency, parse_date, parse_frequency
 from ...honeycomb.files import provides
 from .metafile import FORMAT, compare_meta, fingerprint, load_reference
@@ -366,16 +366,24 @@ def variables_metadata_match_spec(ctx: CheckContext) -> Iterator[Finding]:
 # --- against a reference ---------------------------------------------------------------------
 
 
+@dumps("meta")
+def meta_dump(ctx: CheckContext) -> dict[str, Any]:
+    """meta-bee's section of `ref.yaml`: the meta file (attributes, and shape, dtype and hash of every
+    array but `data`)."""
+    return fingerprint(ctx.dataset)
+
+
 @check("meta")
 def matches_reference(ctx: CheckContext) -> Iterator[Finding]:
     """Metadata and structure match the reference (`--reference` or the spec's `reference`): a ref
-    file, a meta file or a zarr. Same comparison as `meta-bee compare`."""
-    path = ctx.reference_path
-    if path is None:
-        yield skipped("no reference: give `--reference` or `reference` in the spec")
+    file, a meta file or a zarr. Compares the dump with the reference's meta section, as `hive compare`."""
+    if (reason := ctx.reference_missing()) is not None:
+        yield skipped(reason)
         return
+    path = ctx.reference_path
+    assert path is not None
     if not provides(path, "meta", FORMAT):
         yield skipped(f"the reference {path} has no meta section (a stats file?)")
         return
-    comparison = compare_meta(fingerprint(ctx.dataset), load_reference(path), ctx.spec.reference_policy)
+    comparison = compare_meta(bee_dump(ctx, "meta"), load_reference(path), ctx.spec.reference_policy)
     yield from comparison.findings

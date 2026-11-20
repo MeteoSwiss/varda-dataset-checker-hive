@@ -28,14 +28,22 @@ class _Strict(BaseModel):
 
 class Sampling(_Strict):
     seed: int = 0
-    # Random time indices, or "all" for a full pass (exact statistics, but reads every step).
+    # Random dates on the period, or "all" for a full pass (exact statistics, but reads every step).
     n_dates: int | Literal["all"] = 5
     # Grid points per date, the same points on every date, or "all" for the full domain. stats-bee
     # computes mean/stdev on them (min/max and NaN/inf always cover the full domain); spot-bee
     # compares them with the source.
     n_points: int | Literal["all"] = 1000
-    # Time indices always included in the sample, in addition to the random ones.
-    include_dates: list[int] = Field(default_factory=list)
+    # Dates always included in the sample, in addition to the random ones.
+    include_dates: list[datetime] = Field(default_factory=list)
+
+    @field_validator("include_dates", mode="before")
+    @classmethod
+    def _dates_not_indices(cls, value: Any) -> Any:
+        # pydantic would read an int as a unix timestamp; include_dates used to be time indices
+        if isinstance(value, list) and any(isinstance(v, int) and not isinstance(v, bool) for v in value):
+            raise ValueError("`include_dates` are dates (e.g. 2020-03-01T06:00:00), not time indices")
+        return value
 
 
 class Tolerances(_Strict):
@@ -151,8 +159,8 @@ class Spec(_Strict):  # pylint: disable=too-many-instance-attributes
     missing_dates: list[datetime] | None = None
     # Tolerance file (written by `stats-bee calibrate`) for statistics_consistent.
     calibrated_tolerances: Path | None = None
-    # Reference to compare with: a ref file (`hive dump`, meta and stats sections), a meta file
-    # (`meta-bee dump`), a stats file (`stats-bee dump`) or a zarr (meta-bee only).
+    # Reference to compare with: a ref file (`ref.yaml` of `--out`, meta and stats sections) or a
+    # zarr (meta-bee only). May not exist yet: the reference checks then skip (the first reference).
     reference: Path | None = None
     reference_policy: ReferencePolicy = Field(default_factory=ReferencePolicy)
     sampling: Sampling = Field(default_factory=Sampling)
@@ -240,8 +248,8 @@ class Spec(_Strict):  # pylint: disable=too-many-instance-attributes
 
 
 def load_spec(path: str | Path | None) -> Spec:
-    """Load and validate a spec. Files it names must exist, so a misconfigured spec fails here (CLI
-    exit code 2) instead of in every check."""
+    """Load and validate a spec. `calibrated_tolerances` must exist, so a misconfigured spec fails here
+    (CLI exit code 2) instead of in every check. `reference` may not exist yet (the first reference)."""
     if path is None:
         return Spec()
     path = Path(path)
@@ -254,7 +262,7 @@ def load_spec(path: str | Path | None) -> Spec:
         if not value.is_absolute():
             value = spec.base_dir / value
             setattr(spec, key, value)
-        # the reference may be a zarr directory
-        if not (value.exists() if key == "reference" else value.is_file()):
+        # A missing reference is not an error: the reference checks skip, and `--out` writes it.
+        if key == "calibrated_tolerances" and not value.is_file():
             raise FileNotFoundError(f"{path}: {key} not found: {value}")
     return spec

@@ -266,8 +266,6 @@ def test_invalid_variable_entries(write_spec):
         load_spec(write_spec("variables: {T_2M: {min: 300, max: 200}}\n"))
     with pytest.raises(ValueError):
         load_spec(write_spec("variables: {T_2M: {min: cold}}\n"))
-    with pytest.raises(FileNotFoundError, match="reference not found"):
-        load_spec(write_spec("reference: nope.meta.yaml\n"))
 
 
 def test_templates_load(tmp_path):

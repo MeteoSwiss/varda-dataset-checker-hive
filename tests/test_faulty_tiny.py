@@ -78,7 +78,8 @@ pytestmark = [
 @pytest.fixture(scope="module")
 def spec(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("faulty")
-    (tmp / "spec.yaml").write_text(RANGES + "sampling: {n_dates: 20, include_dates: [99, 100]}\n")
+    include = ", ".join(str(d) for d in Dataset(CLEAN).dates[[99, 100]])
+    (tmp / "spec.yaml").write_text(RANGES + f"sampling: {{n_dates: 20, include_dates: [{include}]}}\n")
     save_stats(compute_stats(Dataset(CLEAN), load_spec(tmp / "spec.yaml")), tmp / "reference.json")
     (tmp / "spec.yaml").write_text((tmp / "spec.yaml").read_text() + "reference: reference.json\n")
     return load_spec(tmp / "spec.yaml")

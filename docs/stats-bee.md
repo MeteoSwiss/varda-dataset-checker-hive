@@ -18,12 +18,12 @@ source is spot-bee's job.
 | `finite_values` | no inf on the sampled dates and points, and NaN only in the variables allowed to have them, see [NaNs](#nans) | ERROR |
 | `statistics_window_valid` | `statistics_start_date` <= `statistics_end_date`, both within the dataset's dates | ERROR / WARNING if missing |
 | `constant_fields` | fields in `constant_fields` (the dataset's, else the spec's variables with `constant: true`) don't change between dates (ERROR); other fields aren't identical on all dates, or uniform in space on one date (WARNING, computed forcings exempt) | ERROR / WARNING |
-| `matches_reference_stats` | stored and sample statistics match the stats section of the spec's `reference` (a ref file or a stats file), on the reference's sample, see [stats files](#stats-files) | ERROR / WARNING |
+| `matches_reference_stats` | stored and sample statistics (the dump) match the stats section of the spec's `reference` (a ref file), on the same sample (the spec's); skipped while the reference does not exist, see [stats files](#stats-files) | ERROR / WARNING |
 
 ```bash
 uv run stats-bee check <dataset.zarr> --spec <spec.yaml>            # run the checks
-uv run stats-bee dump <dataset.zarr> --spec <spec.yaml> -o out.yaml  # write a stats file
-uv run stats-bee compare out.yaml reference.yaml                     # compare two stats files (or ref files)
+uv run stats-bee check <dataset.zarr> --spec <spec.yaml> --out hive/   # + reports and ref.yaml (stats section)
+uv run hive compare hive/ref.yaml checks/data.ref.yaml               # compare two dumps
 uv run stats-bee calibrate <dataset.zarr> --spec <spec.yaml> -o tol.yaml  # calibrated tolerances
 ```
 
@@ -57,7 +57,8 @@ each date by its number of finite values. A variable that is NaN everywhere has 
 ERROR of `statistics_consistent`.
 
 **The sample.** The `n_dates` random dates are drawn stratified (one per equal block) over the
-**whole time range**, plus the `include_dates`, so the value checks also see the dates after the
+spec's **whole period** (`start_date` to `end_date` every `frequency`, without the spec's
+`missing_dates`; the dataset's dates if the spec has no period), plus the `include_dates` (dates), so the value checks also see the dates after the
 statistics window (often the validation and test period). Only the random dates inside the window
 are used to estimate the statistics. Every sampled date is read whole, and then summarised:
 - **minimum, maximum, NaN and inf counts over the full domain**, so `physical_ranges`,
@@ -73,10 +74,10 @@ min/max/NaN/inf 0.07 s, mean/stdev on 100k points 0.15–0.3 s, or on the full d
 
 ## Stats files
 
-A stats file is a small fingerprint of a dataset's values on its seeded sample. Its size depends
+stats-bee's dump, the `stats` section of `ref.yaml` (written by `--out`), is a stats file: a small fingerprint of a dataset's values on its seeded sample. Its size depends
 only on the number of variables (and the list of sampled dates), not on the size of the dataset or
-of the sample. Its format follows the extension: `.yaml`/`.yml` gives YAML (recommended, the same
-format as the spec), anything else gives JSON.
+of the sample. It is built once per run, from the sample all checks share:
+`matches_reference_stats` compares it with the reference's `stats` section, and `--out` writes it.
 
 | key | content |
 |---|---|
@@ -86,24 +87,23 @@ format as the spec), anything else gives JSON.
 | `sample` | per variable over all sampled dates: minimum, maximum, NaN and inf counts of the full domain; mean and stdev of the finite values on the sampled points |
 
 Floats are written with `repr`, which round-trips exactly, and NaN and inf are written as `null`.
-The current format is `varda-hive-stats/4`. Files of older formats are rejected: regenerate them
-with `stats-bee dump`.
+The current format is `varda-hive-stats/5`. Files of older formats are rejected: regenerate them
+with `hive ... --out`.
 
 ### Reference workflow in a dataset repo
 
-Usually the stats file is the `stats` section of the dataset's ref file, written together with
-meta-bee's meta file by `hive dump` (see [ci.md](ci.md)). Every command below that reads a stats
-file also takes a ref file. With stats-bee alone:
+The stats file is the `stats` section of the dataset's ref file, written together with meta-bee's
+dump by `--out` (see [ci.md](ci.md)). With stats-bee alone:
 
 ```
-fresh dataset ──► stats-bee check data.zarr              "is this dataset internally OK?"
-                     │ OK
+fresh dataset ──► stats-bee check data.zarr --spec S --out hive/   "is this dataset internally OK?"
+                     │ OK (matches_reference_stats skipped: no reference yet)
                      ▼
-                  stats-bee dump data.zarr -o checks/data.stats.yaml   ──► commit in the dataset repo
+                  cp hive/ref.yaml checks/data.ref.yaml   ──► commit in the dataset repo
 
 later: dataset regenerated (new anemoi version, recipe change, rebuild)
-                  stats-bee dump new.zarr --dates-from checks/data.stats.yaml -o new.stats.yaml
-                  stats-bee compare new.stats.yaml checks/data.stats.yaml   "what changed?"
+                  stats-bee check new.zarr --spec S --out hive/   "what changed?" (hive/report.md)
+                  intended? cp hive/ref.yaml checks/data.ref.yaml
 ```
 
 Some faults are invisible from inside the dataset. For example, +2 K on T_850 with the stored
@@ -112,17 +112,19 @@ accepted version shows them.
 
 ```bash
 # once, after the dataset is built and checked: commit the result
-uv run stats-bee check <dataset.zarr> --spec checks/<dataset>.yaml
-uv run stats-bee dump <dataset.zarr> --spec checks/<dataset>.yaml -o checks/<dataset>.stats.yaml
+uv run hive <dataset.zarr> --spec checks/<dataset>.yaml --strict --out hive/
+cp hive/ref.yaml checks/<dataset>.ref.yaml       # and `reference: <dataset>.ref.yaml` in the spec
 
-# in CI, or after rebuilding the dataset
-uv run stats-bee dump <dataset.zarr> --spec checks/<dataset>.yaml \
-    --dates-from checks/<dataset>.stats.yaml -o new.stats.yaml
-uv run stats-bee compare new.stats.yaml checks/<dataset>.stats.yaml   # exit 1 if anything differs
+# in CI, or after rebuilding the dataset: the same command, exit 1 if anything differs
+uv run hive <dataset.zarr> --spec checks/<dataset>.yaml --strict --out hive/
+uv run hive compare hive/ref.yaml checks/<dataset>.ref.yaml   # the differences again, without the data
 ```
 
-`--dates-from` samples exactly the reference's dates. Dates are matched by value, so a dataset
-with extra or missing time steps still lines up. The points follow from the seed, so the grid,
+The sample depends on the spec only (see varda_hive/honeycomb/sampling.py), so a rebuild that meets
+the spec is sampled on the reference's dates. Dates are matched by value, so a dataset with extra
+time steps still lines up; sampled dates the dataset lacks are listed in `sampling.missing_dates`.
+Changing the sampling or the period in the spec changes the sample: the comparison then reports
+"sampled dates differ" and compares only the stored statistics, until the new `ref.yaml` is accepted. The points follow from the seed, so the grid,
 `seed` and `n_points` must match the reference's (not checked for `n_points: all`). The comparison is
 then cell by cell, `stored` and `sample` statistics of every variable, and needs no statistics.
 A fault on one sampled date changes the sample statistics, so it is found exactly, but the finding
@@ -133,8 +135,7 @@ names the variable and statistic, not the date. Each value is:
   zero, like wind components or precipitation.
 - *differs*: anything else
 
-With `reference` in the spec, `stats-bee check` (and `hive`) run the same comparison as the
-`matches_reference_stats` check, on the reference's dates. See [ci.md](ci.md) for the whole publishing workflow
+`hive compare` runs the same comparison as the `matches_reference_stats` check on two stored dumps. See [ci.md](ci.md) for the whole publishing workflow
 with all bees.
 
 ## How the tolerances work

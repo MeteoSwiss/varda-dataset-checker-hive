@@ -6,11 +6,11 @@
 """Reading and writing the hive's own files (stats files, tolerance files, meta files): YAML for a
 `.yaml`/`.yml` path, JSON otherwise, each with a `format` key checked on load.
 
-A ref file (`hive dump`) holds the reference of each bee in one file, a section per bee:
+A ref file (`ref.yaml`, written by `--out`) holds the dump of each bee, a section per bee:
 
     format: varda-hive-ref/1
-    meta: {format: varda-hive-meta/1, ...}     # what `meta-bee dump` writes
-    stats: {format: varda-hive-stats/4, ...}   # what `stats-bee dump` writes
+    meta: {format: varda-hive-meta/1, ...}     # meta-bee's dump: metadata and structure
+    stats: {format: varda-hive-stats/5, ...}   # stats-bee's dump: statistics on the sample
 
 `read_file(..., section=...)` reads either a bee's own file or its section of a ref file, so a bee
 never needs to know about the others."""
@@ -81,13 +81,14 @@ def read_file(path: str | Path, fmt: str, what: str, command: str = "", section:
     found = content.get("format") if isinstance(content, dict) else None
     if section is not None and found == REF_FORMAT and isinstance(content, dict):
         if not isinstance(content.get(section), dict):
-            raise ValueError(f"{path}: ref file without a `{section}` section (regenerate it with `hive dump`)")
+            raise ValueError(
+                f"{path}: ref file without a `{section}` section (replace it with the `ref.yaml` of `hive ... --out`)")
         content = content[section]
         found = content.get("format")
     if found != fmt:
         family = fmt.rsplit("/", 1)[0] + "/"
-        how = f" with `{command}`" if command else ""
-        hint = f" (an older {what}: regenerate it{how})" if str(found).startswith(family) else ""
+        how = f" with the `ref.yaml` of `{command}`" if command else ""
+        hint = f" (an older {what}: replace it{how})" if str(found).startswith(family) else ""
         raise ValueError(f"{path}: not a {what} of format {fmt!r}, found {found!r}{hint}")
     assert isinstance(content, dict)
     return content

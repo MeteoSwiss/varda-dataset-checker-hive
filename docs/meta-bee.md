@@ -6,10 +6,9 @@ datasets. It does not need anemoi-datasets.
 
 ```bash
 uv run meta-bee check data.zarr --spec checks/data.yaml           # all meta checks
-uv run meta-bee dump data.zarr -o checks/data.meta.yaml            # meta file of the accepted version
-uv run meta-bee compare new.zarr checks/data.meta.yaml             # what is identical, what differs
-uv run meta-bee compare new.zarr checks/data.ref.yaml              # the meta section of a ref file (`hive dump`)
-uv run meta-bee compare new.zarr published.zarr --all              # every item, identical ones too
+uv run meta-bee check data.zarr --spec checks/data.yaml --out hive/   # + reports and ref.yaml (meta section)
+uv run hive compare hive/ref.yaml checks/data.ref.yaml             # what is identical, what differs
+uv run hive compare hive/ref.yaml checks/data.ref.yaml --all       # every item, identical ones too
 ```
 
 ## Checks
@@ -48,7 +47,7 @@ grid_points: 30676
 resolution: 2km
 bbox: {lat_min: 45.43, lat_max: 48.19, lon_min: 5.25, lon_max: 11.03, tolerance: 0.01}
 missing_dates: []
-reference: data.ref.yaml                # a ref file (`hive dump`), a meta file or a zarr
+reference: data.ref.yaml                # a ref file (`ref.yaml` of `--out`) or a zarr; skipped while missing
 reference_policy: {ignore: [], error: [], warning: [], info: []}
 ```
 
@@ -64,14 +63,16 @@ spec's `allow_nans`: `true`, `false` or a list. anemoi writes a list of variable
 is compared as a set (one ERROR per variable allowed by only one side), `false` is the empty list,
 and a list against `true` is an ERROR.
 
-## The reference: meta files and `compare`
+## The reference: the meta section and `compare`
 
-A meta file (`meta-bee dump`, YAML or JSON by extension, about 30 kB) holds the whole `.zattrs` and,
-for every array, its shape, dtype, a sha256 of its values and a short summary. `data` gets only its
-shape and dtype. Commit it next to the spec once a version is accepted, usually as the `meta` section of the ref
-file that `hive dump` writes (with stats-bee's stats file in its `stats` section). A rebuild is then
-compared with it without needing access to the published dataset. A ref file or a zarr can be given
-instead of a meta file anywhere: a zarr is fingerprinted on the fly.
+meta-bee's dump, the `meta` section of `ref.yaml` (written by `--out`, about 30 kB), holds the whole
+`.zattrs` and, for every array, its shape, dtype, a sha256 of its values and a short summary. `data`
+gets only its shape and dtype. It is built once per run: `matches_reference` compares it with the
+reference's `meta` section, and `--out` writes it. Commit `ref.yaml` next to the spec once a version
+is accepted (with stats-bee's dump in its `stats` section); a rebuild is then compared with it
+without needing access to the published dataset. A zarr can be given as `--reference` instead: it is
+fingerprinted on the fly. A spec `reference` that does not exist yet makes `matches_reference` skip
+("reference … not found"): that run's `ref.yaml` is the first reference.
 
 The comparison walks both on dotted paths (`variables_metadata.T_850.mars.levelist`,
 `arrays.latitudes.values`). Every item is `identical`, `differs`, `added` (only in the dataset),
@@ -93,14 +94,16 @@ reference_policy:
   error: [constant_fields]
 ```
 
-`meta-bee compare` prints the differing items as a table (`--all` adds the identical and ignored
-ones, which also shows the paths to use in the policy). It exits 1 when a difference reaches
-`--fail-on` (default `error`). `--format json` and `--format markdown` are available, as for every bee.
+`hive compare a.ref.yaml b.ref.yaml` runs the same comparison on two dumps and prints the differing
+items as a table (`--all` adds the identical and ignored ones, which also shows the paths to use in
+the policy). It exits 1 when a difference reaches `--fail-on` (default `error`), and with `--strict`
+also when a section is in only one of the files. `--format json` and `--format markdown` are
+available, as for every bee.
 
 ## In CI
 
 With `reference` in the spec, `hive --strict` (or `meta-bee check`) runs the reference comparison
 as the `matches_reference` check, so a release needs no separate `compare` step. When a change is
-intended (a new variable, a new period), review `meta-bee compare new.zarr checks/data.ref.yaml`,
-then dump the new ref file (`hive dump`) and commit it with the spec change. See [ci.md](ci.md) for the whole
+intended (a new variable, a new period), review the differences in `hive/report.md` of
+`hive ... --out hive/`, then `cp hive/ref.yaml checks/data.ref.yaml` and commit it with the spec change. See [ci.md](ci.md) for the whole
 workflow and an example CSCS-CI job.

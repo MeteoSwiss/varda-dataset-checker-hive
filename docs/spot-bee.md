@@ -32,7 +32,7 @@ Findings of `matches_source`:
 | INFO | `spot summary: 95 identical, 0 within tolerance, 0 differ, 19 not comparable, 0 unavailable (22 dates × 10000 points)` |
 
 The `details` of the summary list the variables of each group, with the largest absolute difference
-of each and, for differing variables, the dates. Use `--format json` or `--report` to get them.
+of each and, for differing variables, the dates. Use `--format json` or `--out` (`report.json`) to get them.
 
 Values count as **identical** when they are equal in the dataset's precision: the source values are
 cast to the dataset dtype (float32) first, so a GRIB value decoded as float64 that was stored
@@ -54,10 +54,8 @@ spot-bee uses the spec's `sampling`, the same as stats-bee:
 - **Points:** `n_points` grid points, the same on every date, or `all`.
 
 Both bees therefore check the same cells (one definition: `honeycomb/sampling.py:sampled_dates`).
-With a `reference` in the spec, stats-bee samples the reference's dates instead, while spot-bee
-keeps the spec's. They are the same dates as long as the reference was dumped with the same
-`sampling` from a dataset of the same length; spot-bee does not read stats files, to stay
-independent of stats-bee. Reading the source is usually the cost: one GRIB message
+The dates are drawn on the spec's period (`start_date` to `end_date` every `frequency`), so they
+depend on the spec only, and the reference was written on the same dates. Reading the source is usually the cost: one GRIB message
 per (variable, date), whatever `n_points` is. `n_points: all` costs little more than a subset and
 also finds faults on a few grid points, such as spikes.
 
@@ -302,7 +300,7 @@ Options for later:
 ## Example: Varda-tiny (ICH1 test dataset)
 
 With the spec above (and `source_per_variable: {TOT_PREC_1H: {atol: 1.0e-6}}`, as in
-`tests/test_spot_ich1.py`), `n_dates: 20`, `n_points: 10000` and `include_dates: [99, 100]`:
+`tests/test_spot_ich1.py`), `n_dates: 20`, `n_points: 10000` and `include_dates` the dates at time indices 99 and 100:
 
 ```text
 info    spot.matches_source: not comparable with source: 6 h accumulation of TOT_PREC [TOT_PREC_6H]

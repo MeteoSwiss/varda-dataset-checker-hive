@@ -7,7 +7,7 @@ A hive of slim tools ("bees") that check anemoi datasets for faults. Each bee co
 | command | layer | reads |
 |---|---|---|
 | `meta-bee` | metadata and structure: internal consistency, variables, dates, frequency, grid, per-variable metadata, reference diff ([docs](docs/meta-bee.md)) | `.zattrs` and small arrays only |
-| `stats-bee` | values: NaNs, constant fields, physical ranges, stored vs recomputed statistics, reference stats file ([docs](docs/stats-bee.md)) | sampled time steps |
+| `stats-bee` | values: NaNs, constant fields, physical ranges, stored vs recomputed statistics, reference statistics ([docs](docs/stats-bee.md)) | sampled time steps |
 | `spot-bee` | sampled (time, variable, grid points) vs the original source, e.g. GRIB via a grib-index DB: what is identical, what differs ([docs](docs/spot-bee.md)) | sampled time steps + source |
 | `hive` | runs all bees and merges their findings | |
 
@@ -28,17 +28,23 @@ All of them share the same core, the `honeycomb`:
 ```bash
 uv sync                                                # add --extra grib or --extra fdb for spot-bee's sources
 uv run hive <dataset.zarr> --spec <spec.yaml>          # all bees
+uv run hive <dataset.zarr> --spec <spec.yaml> --strict --out hive/   # + report.md, report.json, ref.yaml
 uv run meta-bee check <dataset.zarr> --spec <spec.yaml>   # one bee
 uv run hive --list                                     # available checks
-uv run hive dump <dataset.zarr> --spec <spec.yaml> -o data.ref.yaml   # ref file: meta + stats reference
-uv run meta-bee dump <dataset.zarr> -o meta.yaml       # meta file (metadata + structure)
-uv run meta-bee compare <dataset.zarr> meta.yaml       # metadata: what is identical, what differs
-uv run stats-bee dump <dataset.zarr> --spec <spec.yaml> -o stats.yaml   # stats file
-uv run stats-bee compare stats.yaml reference.yaml     # what is identical, what differs
+uv run hive compare hive/ref.yaml checks/data.ref.yaml # two dumps: what is identical, what differs
 uv run stats-bee calibrate <dataset.zarr> --spec <spec.yaml> -o tolerances.yaml   # calibrated tolerances
 uv run spot-bee check <dataset.zarr> --spec <spec.yaml>   # sampled values vs the source
 uv run hive <dataset.zarr> --spec <spec.yaml> --format json --fail-on warning   # or --format markdown
 ```
+
+A check is a **dump plus a comparison**. Each bee builds its dump once: the facts it compares,
+i.e. meta-bee the metadata and structure, stats-bee the statistics of the seeded sample (defined by
+the spec alone, so every rebuild that meets the spec samples the same dates). Its checks compare the dump with the spec (expected
+values) and with the reference (the accepted dump). `--out DIR` writes the reports (`report.md`,
+`report.json`) and the dump (`ref.yaml`, one section per bee), also when checks fail; without
+`--out` nothing is written. `ref.yaml` is the reference to commit (see
+[Setting up a dataset](#setting-up-a-dataset)). `hive compare` compares two dumps without the data,
+with the same code as the reference checks.
 
 Exit codes:
 
@@ -51,11 +57,14 @@ Exit codes:
 
 ## Release CI
 
-Gate a release on the dataset's spec and its committed reference files, in the dataset repo's CI:
+Gate a release on the dataset's spec and its committed reference, in the dataset repo's CI:
 
 ```bash
-uv run hive $DATASET --spec checks/<dataset>.yaml --strict --report hive.json --format markdown > hive.md
+uv run hive $DATASET --spec checks/<dataset>.yaml --strict --out hive/
 ```
+
+Keep `hive/` as the job's artifact: `report.md` for the merge request, `report.json` for tools,
+`ref.yaml` to accept as the new reference.
 
 `--strict` fails when a check is skipped, so a misconfigured job can't stay green. See
 [docs/ci.md](docs/ci.md) for the publishing workflow, the flags and an example CSCS-CI job built on
@@ -92,7 +101,14 @@ The hive is generic. Everything dataset-specific lives in the **dataset's own re
 ## Setting up a dataset
 
 A dataset needs two files: the spec, written by hand once, which every bee reads, and the ref
-file, generated from the accepted version by `hive dump`.
+file, the dump of the accepted version, written by `--out`. All three workflows are the same
+command:
+
+| workflow | command | then |
+|---|---|---|
+| reference exists (CI, release) | `hive data.zarr --spec S --strict --out hive/` | spec and reference checks; exit 0 or 1 |
+| first reference | the same | the reference checks report "skipped: reference … not found" (exit 1 under `--strict`); review, commit `hive/ref.yaml` as the spec's `reference` |
+| intended change | the same | `hive/report.md` lists the differences to the reference; after review, `cp hive/ref.yaml checks/<dataset>.ref.yaml` |
 
 1. **Copy the template** into the dataset repo:
 
@@ -111,10 +127,12 @@ file, generated from the accepted version by `hive dump`.
    they should catch unit errors and garbage, not unusual weather. Variables without a range are
    listed as INFO. YAML anchors share a range between variables, e.g. the levels of one field.
 
-4. **Choose the sampling.** `n_dates` random dates over the whole time range, `n_points` grid
-   points on each of them for mean and stdev (10k–100k, or `all`; min/max and NaN/inf always cover
-   the full domain), plus `include_dates` for time
-   indices you always want checked. `all` for both gives an exact full pass, affordable only for
+4. **Choose the sampling.** `n_dates` random dates over the spec's period (`start_date` to
+   `end_date` every `frequency`), `n_points` grid points on each of them for mean and stdev
+   (10k–100k, or `all`; min/max and NaN/inf always cover the full domain), plus `include_dates` for
+   dates you always want checked. The sample depends on the spec only, so every rebuild is sampled
+   on the same dates and compares with the reference; changing the sampling or the period is an
+   intended change (accept the new `ref.yaml`). `all` for both gives an exact full pass, affordable only for
    small datasets. Leave the `tolerances` at their defaults unless a check tells you otherwise.
    Optionally calibrate them for this sampling with `stats-bee calibrate`, see
    [docs/stats-bee.md](docs/stats-bee.md#calibrated-tolerances).
@@ -129,17 +147,21 @@ file, generated from the accepted version by `hive dump`.
    and accepted it, e.g. `statistics_consistent` on insolation, whose diurnal cycle a small
    sample can't resolve.
 
-6. **Write the ref file** once this version of the dataset is accepted:
+6. **Accept the first reference.** Set `reference: <dataset>.ref.yaml` in the spec before the file
+   exists; the reference checks then skip ("reference … not found"), they are not a configuration
+   error. Once this version of the dataset is accepted:
 
    ```bash
-   uv run hive dump data.zarr --spec checks/<dataset>.yaml -o checks/<dataset>.ref.yaml
+   uv run hive data.zarr --spec checks/<dataset>.yaml --strict --out hive/
+   cp hive/ref.yaml checks/<dataset>.ref.yaml
    ```
 
-   Set `reference: <dataset>.ref.yaml` in the spec, and commit the spec and the ref file.
+   Commit the spec and the ref file. Accepting an intended change later is the same copy, after
+   reviewing `hive/report.md`.
 
 7. **Gate releases in CI** with `--strict`, see [Release CI](#release-ci). Each rebuild is then
-   compared with the accepted version. The ref file holds the meta file of meta-bee and the stats
-   file of stats-bee, see [docs/meta-bee.md](docs/meta-bee.md) and
+   compared with the accepted version. The ref file holds meta-bee's dump (`meta`) and stats-bee's
+   dump (`stats`), see [docs/meta-bee.md](docs/meta-bee.md) and
    [docs/stats-bee.md](docs/stats-bee.md#stats-files).
 
 ### Spec fields
@@ -161,10 +183,10 @@ paths resolve against the spec file's directory.
 | `grid_points`, `resolution`, `bbox` | meta-bee | expected grid size, `resolution` attribute, extent `{lat_min, lat_max, lon_min, lon_max, tolerance}` |
 | `allow_nans` | meta-bee, stats-bee | `true`, `false` or a list of variables; with a `variables` mapping, set it per variable instead |
 | `missing_dates` | meta-bee | expected `missing_dates` |
-| `reference` | meta-bee, stats-bee | ref file (`hive dump`) of the accepted version; a meta file, a stats file or a zarr (meta-bee only) work too |
+| `reference` | meta-bee, stats-bee | ref file (`ref.yaml` of `--out`) of the accepted version, or a zarr (meta-bee only); if it does not exist yet, the reference checks are skipped (the first reference) |
 | `reference_policy` | meta-bee | `{ignore, error, warning, info: [path globs]}`: severity of differences to the reference |
 | `calibrated_tolerances` | stats-bee | tolerance file for `statistics_consistent`, written by `stats-bee calibrate` |
-| `sampling` | stats-bee, spot-bee | `seed`, `n_dates` and `n_points` (int or `all`), `include_dates`; the same dates x points for both bees |
+| `sampling` | stats-bee, spot-bee | `seed`, `n_dates` and `n_points` (int or `all`), `include_dates` (dates); drawn on the spec's period (the dataset's dates without one); the same dates x points for both bees |
 | `tolerances` | stats-bee, spot-bee | `statistics_rtol`, `z_threshold`, `compare_atol_stdev` (stats-bee); `source_rtol`, `source_atol`, `source_per_variable: {VAR: {rtol, atol}}` (spot-bee) |
 | `source` | spot-bee | source plug-in and its args, see [docs/spot-bee.md](docs/spot-bee.md#source-plug-ins) |
 | `ignore_warnings` | all bees | `{check: [variables]}` (or `"*"` for all variables): warnings demoted to INFO |

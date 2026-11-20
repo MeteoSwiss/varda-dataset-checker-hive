@@ -30,11 +30,11 @@ def test_round_trip(dataset_path, tmp_path, suffix):
 
 
 def test_rejects_other_files(tmp_path):
-    (tmp_path / "s.json").write_text('{"format": "varda-hive-stats/4"}')
+    (tmp_path / "s.json").write_text('{"format": "varda-hive-stats/5"}')
     with pytest.raises(ValueError, match="not a meta file"):
         load_meta(tmp_path / "s.json")
     (tmp_path / "old.json").write_text('{"format": "varda-hive-meta/0"}')
-    with pytest.raises(ValueError, match="regenerate it with `meta-bee dump`"):
+    with pytest.raises(ValueError, match="replace it with the `ref.yaml` of `hive ... --out`"):
         load_meta(tmp_path / "old.json")
     with pytest.raises(FileNotFoundError):
         load_reference(tmp_path / "nope.zarr")

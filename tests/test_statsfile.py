@@ -4,7 +4,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 """The sample, stats files (generation, round-trip, comparison), calibration, and the
-`stats-bee dump` / `compare` / `calibrate` commands."""
+stats dump of `--out`, `hive compare` and `stats-bee calibrate`."""
 import json
 
 import numpy as np
@@ -12,7 +12,7 @@ import pytest
 import yaml
 import zarr
 
-from varda_hive.cli import stats_bee_main
+from varda_hive.cli import hive_main, stats_bee_main
 from varda_hive.honeycomb import CheckContext, Dataset, Severity, Spec, load_spec, run
 from varda_hive.honeycomb.sampling import sample_points
 from varda_hive.bees.stats.calibrate import calibrate
@@ -31,7 +31,7 @@ def _severities(comparison):
 
 @pytest.mark.parametrize("name", ["s.json", "s.yaml"])
 def test_round_trip_is_exact(dataset_path, tmp_path, name):
-    stats = _dump(dataset_path, n_dates=3, include_dates=[7])
+    stats = _dump(dataset_path, n_dates=3, include_dates=["2020-03-01T07:00:00"])
     stats["stored"]["T_2M"]["mean"] = 1e-17  # tiny floats too
     save_stats(stats, tmp_path / name)
     assert load_stats(tmp_path / name) == stats
@@ -53,7 +53,7 @@ def test_stats_file_size_is_independent_of_the_dataset_and_sample(tmp_path):
 
 
 def test_sample_aggregate_is_exact(dataset_path):
-    spec = Spec(sampling={"n_dates": 4, "n_points": 20, "include_dates": [7]})
+    spec = Spec(sampling={"n_dates": 4, "n_points": 20, "include_dates": ["2020-03-01T07:00:00"]})
     ds = Dataset(dataset_path)
     sample = compute_sample(ds, spec)
     points = sample_points(NG, spec.sampling)
@@ -69,7 +69,7 @@ def test_sample_aggregate_is_exact(dataset_path):
 
 def test_extremes_and_counts_cover_points_outside_the_subset(dataset_path):
     """A spike or a NaN on a single grid point that is not sampled is still found."""
-    spec = Spec(sampling={"n_dates": 1, "n_points": 10, "include_dates": [6]})
+    spec = Spec(sampling={"n_dates": 1, "n_points": 10, "include_dates": ["2020-03-01T06:00:00"]})
     outside = int(np.setdiff1d(np.arange(NG), sample_points(NG, spec.sampling))[0])
     data = zarr.open_group(str(dataset_path), mode="r+")["data"]
     data[6, 1, 0, outside] = 400.0  # T_2M spike
@@ -113,9 +113,9 @@ def test_yaml_and_json_compare_identical(dataset_path, tmp_path):
 
 
 def test_compare_differs_and_close(dataset_path):
-    reference = _dump(dataset_path, n_dates=2, include_dates=[5])
+    reference = _dump(dataset_path, n_dates=2, include_dates=["2020-03-01T05:00:00"])
     zarr.open_group(str(dataset_path), mode="r+")["data"][5, 1] += 0.01
-    stats = compute_stats(Dataset(dataset_path), Spec(), dates_from=reference)
+    stats = _dump(dataset_path, n_dates=2, include_dates=["2020-03-01T05:00:00"])
     assert stats["sampling"]["dates"] == reference["sampling"]["dates"]
 
     differs = [f for f in compare_stats(stats, reference).findings if f.severity == Severity.ERROR]
@@ -126,33 +126,34 @@ def test_compare_differs_and_close(dataset_path):
     assert Severity.ERROR not in _severities(close) and Severity.WARNING in _severities(close)
 
 
+PERIOD = {"start_date": "2020-03-01T00:00:00", "end_date": f"2020-03-01T{NT - 1:02d}:00:00", "frequency": "1h"}
+
+
 def test_compare_aligns_dates_not_positions(dataset_path, tmp_path):
-    reference = _dump(dataset_path, n_dates=3)
+    """The sample follows the spec's period, so a longer rebuild with the same spec compares."""
+    spec = Spec(sampling={"n_dates": 3}, **PERIOD)
+    reference = compute_stats(Dataset(dataset_path), spec)
     longer = build_dataset(tmp_path / "longer.zarr", nt=NT + 5)
-    stats = compute_stats(Dataset(longer), Spec(), dates_from=reference)
+    stats = compute_stats(Dataset(longer), spec)
     assert stats["sampling"]["dates"] == reference["sampling"]["dates"]
     assert not any("dates" in f.message for f in compare_stats(stats, reference).findings)
-    # without --dates-from the seed draws other dates on the longer time axis: reported
+    # without a period the seed draws other dates on the longer time axis: reported
     other = compute_stats(Dataset(longer), Spec(sampling={"n_dates": 3}))
     assert any("sampled dates differ" in f.message for f in compare_stats(other, reference).findings)
 
 
 def test_compare_reports_sampling_and_variable_mismatch(dataset_path, tmp_path):
-    reference = _dump(dataset_path, n_dates="all", n_points=10)
+    spec = Spec(sampling={"n_dates": "all", "n_points": 10}, **PERIOD)
+    reference = compute_stats(Dataset(dataset_path), spec)
     shorter = build_dataset(tmp_path / "shorter.zarr", variables=VARIABLES[:-1], nt=NT - 2)
-    stats = compute_stats(Dataset(shorter), Spec(sampling={"n_points": 10}), dates_from=reference)
+    stats = compute_stats(Dataset(shorter), spec)
     assert stats["sampling"]["missing_dates"] == reference["sampling"]["dates"][-2:]
     messages = [f.message for f in compare_stats(stats, reference).findings if f.severity == Severity.ERROR]
-    assert ("sampled dates differ from the reference's: 2 missing, 0 extra (use --dates-from); "
+    assert ("sampled dates differ from the reference's: 2 missing, 0 extra; "
             "sample statistics not compared") in messages
     assert not any(m.startswith("sample ") for m in messages)  # only the stored statistics are compared
     assert "variable missing (present in reference stats)" in messages
-    other_points = compute_stats(Dataset(dataset_path),
-                                 Spec(sampling={
-                                     "n_points": 10,
-                                     "seed": 1
-                                 }),
-                                 dates_from=reference)
+    other_points = compute_stats(Dataset(dataset_path), Spec(sampling={"n_dates": "all", "n_points": 10, "seed": 1}))
     assert any("sample differs from the reference's" in f.message
                for f in compare_stats(other_points, reference).findings)
 
@@ -225,25 +226,26 @@ def test_calibrated_tolerances_in_the_check(tmp_path, write_spec):
 
 
 def test_cli(dataset_path, tmp_path, capsys):
-    ref, new = tmp_path / "ref.yaml", tmp_path / "new.json"
-    assert stats_bee_main(["dump", str(dataset_path), "-o", str(ref)]) == 0
-    assert stats_bee_main(["dump", str(dataset_path), "--dates-from", str(ref), "-o", str(new)]) == 0
-    assert stats_bee_main(["compare", str(new), str(ref)]) == 0
+    """stats-bee's dump via `--out`, compared with `hive compare`."""
+    ref, new = tmp_path / "ref" / "ref.yaml", tmp_path / "new.yaml"
+    assert stats_bee_main(["check", str(dataset_path), "--out", str(ref.parent)]) == 0
+    assert stats_bee_main(["check", str(dataset_path), "--reference", str(ref), "--out", str(tmp_path / "new")]) == 0
+    (tmp_path / "new" / "ref.yaml").rename(new)
+    assert hive_main(["compare", str(new), str(ref)]) == 0
     assert "5/5 variables identical" in capsys.readouterr().out
 
-    stats = json.loads(new.read_text())
-    stats["stored"]["T_850"]["mean"] += 1
-    new.write_text(json.dumps(stats))
-    assert stats_bee_main(["compare", str(new), str(ref)]) == 1
+    content = yaml.safe_load(new.read_text())
+    assert set(content) == {"format", "stats"}  # a single bee writes only its section
+    content["stats"]["stored"]["T_850"]["mean"] += 1
+    new.write_text(yaml.safe_dump(content))
+    assert hive_main(["compare", str(new), str(ref)]) == 1
     out = capsys.readouterr().out
     assert "T_850" in out and "stored mean differs" in out
-    assert stats_bee_main(["compare", str(new), str(ref), "--format", "json"]) == 1
+    assert hive_main(["compare", str(new), str(ref), "--format", "json"]) == 1
     assert json.loads(capsys.readouterr().out)["summary"]["ERROR"] == 1
-    assert stats_bee_main(["check", str(dataset_path)]) == 0
-    assert "checks run" in capsys.readouterr().out
 
 
 def test_old_stats_files_are_rejected(tmp_path):
     (tmp_path / "old.json").write_text(json.dumps({"format": "varda-hive-stats/2"}))
-    with pytest.raises(ValueError, match="regenerate it with `stats-bee dump`"):
+    with pytest.raises(ValueError, match="replace it with the `ref.yaml` of `hive ... --out`"):
         load_stats(tmp_path / "old.json")

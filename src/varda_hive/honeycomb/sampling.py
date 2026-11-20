@@ -3,12 +3,20 @@
 # Distributed under the terms of the BSD 3-Clause License.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-"""Seeded sampling, so every run with the same spec checks the same cells."""
+"""Seeded sampling, so every run with the same spec checks the same cells.
+
+The sample is defined by the spec alone: the dates are drawn on the spec's period (`start_date` to
+`end_date` every `frequency`), not on the dataset's time axis, so every rebuild that meets the spec
+samples the same dates, and a reference written from one compares with the next. Changing the
+sampling or the period in the spec changes the sample: an intended change, accepted with a new
+reference. Only a spec without a period falls back to the dataset's dates."""
+from datetime import datetime
 from typing import Collection
 
 import numpy as np
 
-from .spec import Sampling
+from .dataset import parse_date, parse_frequency
+from .spec import Sampling, Spec
 
 
 def random_time_indices(n_times: int,
@@ -44,18 +52,45 @@ def random_time_indices(n_times: int,
     return sorted(rng.choice(candidates, size=min(n, len(candidates)), replace=False).tolist())
 
 
-def sampled_dates(n_times: int, sampling: Sampling, exclude: Collection[int] = ()) -> dict[int, bool]:
-    """{time index: drawn at random} of the spec's sample: the stratified random draw plus
-    `include_dates` (False unless also drawn), without `exclude`. The one definition of the sample,
-    so spot-bee and stats-bee check the same cells."""
-    picked = {t: False for t in sampling.include_dates if 0 <= t < n_times and t not in exclude}
-    picked |= {t: True for t in random_time_indices(n_times, sampling, stratified=True, exclude=exclude)}
-    return picked
+def _date(value: datetime) -> np.datetime64:
+    return parse_date(value.replace(tzinfo=None).isoformat())
 
 
-def sample_time_indices(n_times: int, sampling: Sampling, exclude: Collection[int] = ()) -> list[int]:
-    """The sampled time indices, sorted, see `sampled_dates`."""
-    return sorted(sampled_dates(n_times, sampling, exclude))
+def sample_axis(spec: Spec, dates: np.ndarray) -> np.ndarray:
+    """The time axis the sample is drawn on: the spec's period when it has `start_date`, `end_date`
+    and `frequency`, else the dataset's `dates`."""
+    if spec.start_date is None or spec.end_date is None or spec.frequency is None:
+        return np.asarray(dates).astype("datetime64[s]")
+    start, end = _date(spec.start_date), _date(spec.end_date)
+    axis = np.arange(start, end + np.timedelta64(1, "s"), parse_frequency(spec.frequency))
+    return axis.astype("datetime64[s]")
+
+
+def sampled_dates(spec: Spec, dates: np.ndarray, missing: Collection[int] = ()) -> tuple[dict[int, bool], list[str]]:
+    """The sample in `dates`, as {time index: drawn at random}, and the sampled dates not in `dates` (or
+    at one of its `missing` indices). The stratified random draw on `sample_axis`, without the missing
+    dates (the spec's `missing_dates`, else the dataset's), plus `include_dates`. The one definition of
+    the sample, so spot-bee and stats-bee check the same cells."""
+    dates = np.asarray(dates).astype("datetime64[s]")
+    axis = sample_axis(spec, dates)
+    if spec.missing_dates is not None:
+        skip = np.array([_date(d) for d in spec.missing_dates], dtype="datetime64[s]")
+    else:
+        skip = dates[sorted(missing)]
+    exclude = set(np.flatnonzero(np.isin(axis, skip)).tolist())
+    wanted = {str(_date(d)): False for d in spec.sampling.include_dates}
+    wanted |= {
+        str(axis[i]): True
+        for i in random_time_indices(len(axis), spec.sampling, stratified=True, exclude=exclude)
+    }
+    position = {str(d): t for t, d in enumerate(dates) if t not in missing}
+    picked = {position[d]: random for d, random in wanted.items() if d in position}
+    return picked, sorted(d for d in wanted if d not in position)
+
+
+def sample_time_indices(spec: Spec, dates: np.ndarray, missing: Collection[int] = ()) -> list[int]:
+    """The sampled time indices in `dates`, sorted, see `sampled_dates`."""
+    return sorted(sampled_dates(spec, dates, missing)[0])
 
 
 def sample_points(n_grid: int, sampling: Sampling, salt: int = 0) -> np.ndarray:

@@ -4,10 +4,11 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 """The sample stats-bee checks, and stats files: a small, fixed-size YAML or JSON fingerprint of a
-dataset (the format follows the file extension), written by `stats-bee dump` and compared by
-`stats-bee compare`.
+dataset (the format follows the file extension), stats-bee's dump: the `stats` section of
+`ref.yaml` (`--out`), compared by the `matches_reference_stats` check and `hive compare`.
 
-The sample is `n_dates` seeded dates, stratified over the whole time range (plus `include_dates`).
+The sample is `n_dates` seeded dates, stratified over the spec's period (plus `include_dates`), see
+varda_hive/honeycomb/sampling.py: the same spec samples the same dates on every rebuild.
 Every sampled date is read whole (one chunk), so per date and variable:
 - minimum, maximum and the NaN and inf counts cover the **full domain**: cheap, and a single bad
   point is never missed;
@@ -21,10 +22,10 @@ A stats file holds, per variable:
   mean and stdev of the finite values on the sampled points
 
 Its size depends only on the number of variables (and the list of sampled dates in `sampling`),
-not on the size of the dataset. Two stats files of the same sample (same seed, points and dates,
-see `--dates-from`) compare cell by cell, without any statistics: a value is identical, close
+not on the size of the dataset. Two stats files of the same sample (same spec sampling and
+period) compare cell by cell, without any statistics: a value is identical, close
 (within `compare_atol_stdev` * stdev) or differs. Floats are written with `repr`, which
-round-trips exactly, and NaN/inf as null. Dates in the dataset's `missing_dates` are never sampled.
+round-trips exactly, and NaN/inf as null. Missing dates are never sampled.
 """
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -41,7 +42,7 @@ from ...honeycomb.dataset import STATISTICS
 from ...honeycomb.files import read_file, save_file
 from ...honeycomb.sampling import sample_points, sampled_dates
 
-FORMAT = "varda-hive-stats/4"
+FORMAT = "varda-hive-stats/5"
 # Per-date summary of one variable: mean/stdev (and n_finite, their weight) on the sampled points,
 # minimum/maximum and the NaN/inf counts on the full domain.
 SUMMARY = ("mean", "stdev", "minimum", "maximum", "n_nan", "n_inf", "n_finite")
@@ -76,7 +77,7 @@ class Sample:  # pylint: disable=too-many-instance-attributes
     points_per_date: int  # values per variable and date for mean/stdev (sampled points x ensemble members)
     values_per_date: int  # the same for the full domain
     n_window: int  # dates in the statistics window, without the missing dates
-    missing: list[str]  # requested dates (`--dates-from`, `include_dates`) that could not be sampled
+    missing: list[str]  # sampled dates (the spec's) that are not in the dataset or missing in it
     stored: dict[str, dict[str, Any]]  # None for NaN
     seed: int
 
@@ -128,30 +129,20 @@ class Sample:  # pylint: disable=too-many-instance-attributes
         return math.sqrt(max(0.0, 1 - k / g)) / math.sqrt(k) if k else 0.0
 
 
-def sample_indices(ds: Dataset, spec: Spec, dates_from: dict | None = None) -> tuple[dict[int, bool], list[str]]:
-    """{time index: is random} of the sample, and the requested dates that could not be sampled.
+def sample_indices(ds: Dataset, spec: Spec) -> tuple[dict[int, bool], list[str]]:
+    """{time index: is random} of the spec's sample, and the sampled dates the dataset lacks.
 
-    The random dates are stratified over the whole time range, so the value checks also cover the
-    dates after the statistics window; `is random` is True only for those inside the window.
+    The random dates are stratified over the whole period, so the value checks also cover the dates
+    after the statistics window; `is random` is True only for those inside the window.
     """
     window = statistics_window(ds)
-    date_strs = [str(d) for d in ds.dates]
-    excluded = ds.missing_indices
-    if dates_from is not None:
-        position = {d: t for t, d in enumerate(date_strs) if t not in excluded}
-        wanted = list(zip(dates_from["sampling"]["dates"], dates_from["sampling"]["random"]))
-        missing = [d for d, _ in wanted if d not in position]
-        picked = {position[d]: r for d, r in wanted if d in position}
-    else:
-        missing = [date_strs[t] for t in spec.sampling.include_dates if t in excluded]
-        picked = sampled_dates(len(ds.dates), spec.sampling, exclude=excluded)
+    picked, missing = sampled_dates(spec, ds.dates, ds.missing_indices)
     return {t: r and window[0] <= t < window[1] for t, r in picked.items()}, missing
 
 
-def compute_sample(ds: Dataset, spec: Spec, dates_from: dict | None = None) -> Sample:
-    """Read and summarise the sample: the spec's, or the dates of `dates_from` (another stats file)
-    so that the two compare. One read per sampled date."""
-    picked, missing = sample_indices(ds, spec, dates_from)
+def compute_sample(ds: Dataset, spec: Spec) -> Sample:
+    """Read and summarise the spec's sample. One read per sampled date."""
+    picked, missing = sample_indices(ds, spec)
     indices = sorted(picked)
     n_grid = ds.data.shape[-1]
     points = sample_points(n_grid, spec.sampling)
@@ -301,7 +292,7 @@ def provenance(ds: Dataset, fmt: str) -> dict[str, Any]:
     }
 
 
-def stats_file(ds: Dataset, spec: Spec, sample: Sample, dates_from: dict | None = None) -> dict[str, Any]:
+def stats_file(ds: Dataset, spec: Spec, sample: Sample) -> dict[str, Any]:
     """The stats file content for `sample` of `ds`."""
     window = statistics_window(ds)
     return provenance(ds, FORMAT) | {
@@ -312,14 +303,11 @@ def stats_file(ds: Dataset, spec: Spec, sample: Sample, dates_from: dict | None 
             spec.sampling.n_dates,
             "n_points":
             spec.sampling.n_points,
-            "include_dates":
-            spec.sampling.include_dates,
+            "include_dates": [str(d) for d in spec.sampling.include_dates],
             "n_grid":
             ds.data.shape[-1],
             "full_domain":
             sample.full_domain,
-            "dates_from":
-            dates_from["dataset"]["name"] if dates_from else None,
             "statistics_window": [
                 ds.date_str(window[0]) if window[0] < len(ds.dates) else None,
                 ds.date_str(window[1] - 1) if window[1] > 0 else None,
@@ -328,8 +316,7 @@ def stats_file(ds: Dataset, spec: Spec, sample: Sample, dates_from: dict | None 
             sample.n_window,
             "missing_dates":
             sample.missing,
-            # The sampled dates, and which of them are random dates inside the statistics window,
-            # so `--dates-from` reproduces the sample on a dataset with another time axis.
+            # The sampled dates, and which of them are random dates inside the statistics window.
             "dates":
             sample.dates,
             "random":
@@ -341,9 +328,9 @@ def stats_file(ds: Dataset, spec: Spec, sample: Sample, dates_from: dict | None 
     }
 
 
-def compute_stats(ds: Dataset, spec: Spec, dates_from: dict | None = None) -> dict[str, Any]:
+def compute_stats(ds: Dataset, spec: Spec) -> dict[str, Any]:
     """Read the sample of `ds` and build its stats file content."""
-    return stats_file(ds, spec, compute_sample(ds, spec, dates_from), dates_from)
+    return stats_file(ds, spec, compute_sample(ds, spec))
 
 
 def save_stats(stats: dict, path: str | Path | None) -> None:
@@ -352,7 +339,7 @@ def save_stats(stats: dict, path: str | Path | None) -> None:
 
 
 def load_stats(path: str | Path) -> dict:
-    return read_file(path, FORMAT, "stats file", "stats-bee dump", section="stats")
+    return read_file(path, FORMAT, "stats file", "hive ... --out", section="stats")
 
 
 # --- comparing two stats files ---------------------------------------------------------------
@@ -425,8 +412,8 @@ def _compare_sampling(new: dict, ref: dict) -> tuple[list[Finding], bool]:
     if only_ref or only_new:
         findings.append(
             error(
-                f"sampled dates differ from the reference's: {len(only_ref)} missing, {len(only_new)} extra "
-                "(use --dates-from); sample statistics not compared",
+                f"sampled dates differ from the reference's: {len(only_ref)} missing, {len(only_new)} extra; "
+                "sample statistics not compared",
                 details={
                     "missing": only_ref[:20],
                     "extra": only_new[:20]

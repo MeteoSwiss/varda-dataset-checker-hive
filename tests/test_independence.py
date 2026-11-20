@@ -22,8 +22,12 @@ for other in others:
 from varda_hive import cli
 from varda_hive.honeycomb import checks_for
 assert checks_for(bee), f"{bee} has no checks"
-code = getattr(cli, f"{bee}_bee_main")(["check", dataset] + (["--spec", spec[0]] if spec else []))
+import pathlib, tempfile, yaml
+out = pathlib.Path(tempfile.mkdtemp())
+code = getattr(cli, f"{bee}_bee_main")(["check", dataset, "--out", str(out)] + (["--spec", spec[0]] if spec else []))
 assert code in (0, 1), f"{bee}-bee check exited {code}"
+ref = yaml.safe_load((out / "ref.yaml").read_text())  # --out dumps only this bee
+assert set(ref) - {"format"} <= {bee}, f"{bee}-bee wrote sections {sorted(ref)}"
 loaded = {m.split(".")[2] for m in sys.modules if m.startswith("varda_hive.bees.") and sys.modules[m] is not None}
 assert loaded == {bee}, f"{bee}-bee loaded other bees: {sorted(loaded - {bee})}"
 """

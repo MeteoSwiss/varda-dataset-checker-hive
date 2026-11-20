@@ -208,7 +208,7 @@ def matches_source(ctx: CheckContext) -> Iterator[Finding]:
                     tolerances=ctx.spec.tolerances,
                     points=sample_points(ds.data.shape[-1], ctx.spec.sampling),
                     shape=(ds.data.shape[2], ds.data.shape[-1]))
-    times = sample_time_indices(len(ds.dates), ctx.spec.sampling, exclude=ds.missing_indices)
+    times = sample_time_indices(ctx.spec, ds.dates, ds.missing_indices)
     for t in times:
         yield from spot.compare_step(ds, t)
     for name, tally in spot.tallies.items():

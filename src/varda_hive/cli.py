@@ -4,13 +4,15 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 """Command-line entry points:
-- `hive <dataset>` runs all bees
-- `hive dump <dataset>` writes a ref file: the `dump` of each bee (meta file, stats file) in one file,
-  see varda_hive/honeycomb/files.py
-- `meta-bee check`, `stats-bee check` and `spot-bee check` run one bee each, with the same options
-- extra subcommands of a bee, like `stats-bee dump` or `meta-bee compare`, live in the bee's own
-  `cli.py` (see varda_hive/bees/stats/cli.py and varda_hive/bees/meta/cli.py), imported only when that
-  bee's command runs, so one bee never loads another
+- `hive <dataset>` runs all bees. A check is a dump plus a comparison: each bee builds its dump (its
+  section of a ref file, see varda_hive/honeycomb/files.py) once and compares it with the spec and the
+  reference. `--out DIR` writes report.md, report.json and ref.yaml (the dump), also when checks fail.
+- `meta-bee check`, `stats-bee check` and `spot-bee check` run one bee each, with the same options;
+  their `--out` writes only that bee's section into ref.yaml
+- `hive compare A.ref.yaml B.ref.yaml` compares two dumps without the data, with the same code as the
+  reference checks (each bee's `compare_section` in its own cli.py)
+- extra subcommands of a bee, like `stats-bee calibrate`, live in the bee's own `cli.py`, imported
+  only when that bee's command runs, so one bee never loads another
 
 Exit codes, so CI can tell a bad dataset from a broken job:
 - 0: no finding reaches --fail-on (default: error), and with --strict no check was skipped
@@ -30,8 +32,9 @@ from typing import Any, Callable, Sequence
 
 import yaml
 
-from .honeycomb import BEES, CheckContext, Dataset, Severity, checks_for, load_spec, run
-from .honeycomb.files import save_ref
+from .honeycomb import (BEES, CheckContext, Dataset, Report, Severity, checks_for, collect_dumps, has_dump, load_spec,
+                        run, skipped)
+from .honeycomb.files import REF_FORMAT, file_format, read_file, save_ref
 from .honeycomb.report import to_json, to_markdown, to_text
 
 BEE_DESCRIPTIONS = {
@@ -50,8 +53,8 @@ def _add_check_args(p: ArgumentParser, with_bees: bool) -> None:
     p.add_argument("dataset", nargs="?", help="path to the anemoi zarr dataset")
     p.add_argument("--spec", help="dataset spec YAML (see templates/spec.example.yaml)")
     p.add_argument("--reference",
-                   help="reference to compare with: a ref file (`hive dump`), a meta or stats file, or a zarr "
-                   "(meta-bee only); overrides the spec's `reference`")
+                   help="reference to compare with: a ref file (`ref.yaml` of `--out`), or a zarr (meta-bee "
+                   "only); overrides the spec's `reference`")
     p.add_argument("--select", nargs="+", metavar="CHECK", help="run only these checks")
     p.add_argument("--format", choices=("text", "json", "markdown"), default="text")
     p.add_argument("--fail-on", choices=("error", "warning"), default="error")
@@ -59,7 +62,9 @@ def _add_check_args(p: ArgumentParser, with_bees: bool) -> None:
     p.add_argument("--strict",
                    action="store_true",
                    help="fail when a check is skipped, e.g. for a missing spec field (recommended in CI)")
-    p.add_argument("--report", metavar="FILE", help="also write the JSON report to FILE")
+    p.add_argument("--out",
+                   metavar="DIR",
+                   help="write report.md, report.json and ref.yaml (the dump, to commit as the reference) to DIR")
     p.add_argument("--list", action="store_true", help="list the bees and their checks and exit")
     if with_bees:
         p.add_argument("--bees", nargs="+", choices=BEES, default=list(BEES))
@@ -81,16 +86,31 @@ def _run_checks(args: Namespace, bees: list[str], prog: str) -> int:
     if reference is not None and not reference.exists():  # a usage error (exit 2), not a check crash
         raise FileNotFoundError(f"reference not found: {reference}")
     ctx = CheckContext(dataset=Dataset(args.dataset), spec=load_spec(args.spec), reference=reference)
+    out = Path(args.out) if args.out else None
+    if out is not None and ctx.reference_path is not None and (out /
+                                                               "ref.yaml").resolve() == ctx.reference_path.resolve():
+        raise ValueError(f"--out {out} would overwrite the reference {ctx.reference_path}: write to another directory "
+                         "and copy ref.yaml once the differences are reviewed")
     report = run(ctx, bees=bees, select=args.select)
-    if args.report:
-        Path(args.report).write_text(to_json(report) + "\n", encoding="utf-8")
+    sections = collect_dumps(ctx, bees, report) if out is not None else {}  # a failed dump is a finding
+    _print_report(report, args)  # first, so a failure to write --out does not lose the findings
+    if out is not None:
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "report.md").write_text(to_markdown(report) + "\n", encoding="utf-8")
+        (out / "report.json").write_text(to_json(report) + "\n", encoding="utf-8")
+        save_ref(sections, out / "ref.yaml")
+    return report.exit_code(Severity[args.fail_on.upper()], strict=args.strict)
+
+
+def _print_report(report: Report, args: Namespace, tables: str = "") -> None:
     if args.format == "json":
         print(to_json(report))
     elif args.format == "markdown":
-        print(to_markdown(report))
+        print(to_markdown(report, details=not tables) + ("\n" + tables if tables else ""))
     else:
-        print(to_text(report, min_severity=Severity.WARNING if args.quiet else Severity.INFO))
-    return report.exit_code(Severity[args.fail_on.upper()], strict=args.strict)
+        if tables:
+            print(tables)
+        print(to_text(report, min_severity=Severity.WARNING if getattr(args, "quiet", False) else Severity.INFO))
 
 
 def guarded(prog: str, fn: Callable[[Namespace], int]) -> Callable[[Namespace], int]:
@@ -112,52 +132,79 @@ def guarded(prog: str, fn: Callable[[Namespace], int]) -> Callable[[Namespace], 
     return wrapper
 
 
-# Bees with a section in a ref file, i.e. a `dump_section` in their cli.py.
-DUMP_BEES = ("meta", "stats")
-
-
 def hive_main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if argv[:1] == ["dump"]:
-        return _hive_dump_main(argv[1:])
+    if argv[:1] == ["compare"]:
+        return _hive_compare_main(argv[1:])
     p = ArgumentParser(prog="hive",
+                       formatter_class=RawDescriptionHelpFormatter,
                        description="Run all bees on an anemoi dataset.",
-                       epilog="`hive dump <dataset> --spec S -o X.ref.yaml` writes the reference of all bees.")
+                       epilog="""examples:
+  hive data.zarr --spec checks/data.yaml --strict --out hive/
+      reference exists: spec and reference checks; hive/ref.yaml is the dataset's dump
+      first reference:  the reference checks are skipped; commit hive/ref.yaml as the spec's `reference`
+      intended change:  review hive/report.md, then cp hive/ref.yaml checks/data.ref.yaml
+  hive compare a.ref.yaml b.ref.yaml        compare two dumps without the data""")
     _add_check_args(p, with_bees=True)
     args = p.parse_args(argv)
     return guarded("hive", lambda a: _run_checks(a, a.bees, "hive"))(args)
 
 
-def _hive_dump_main(argv: list[str]) -> int:
-    p = ArgumentParser(prog="hive dump",
+def _hive_compare_main(argv: list[str]) -> int:
+    p = ArgumentParser(prog="hive compare",
                        formatter_class=RawDescriptionHelpFormatter,
-                       description="Write the ref file of an anemoi dataset: the meta file (`meta-bee dump`) and the "
-                       "stats file (`stats-bee dump`) in one file. Commit it next to the spec and set "
-                       "`reference: <name>.ref.yaml` in the spec.",
+                       description="Compare two ref files (`ref.yaml` of `--out`), section by section, with the "
+                       "same comparison as the reference checks, and show what differs.",
                        epilog="""examples:
-  hive dump data.zarr --spec checks/data.yaml -o checks/data.ref.yaml
-  hive dump new.zarr --spec checks/data.yaml --dates-from checks/data.ref.yaml -o new.ref.yaml""")
-    p.add_argument("dataset", help="path to the anemoi zarr dataset")
-    p.add_argument("--spec", help="dataset spec YAML (sampling settings)")
-    p.add_argument("--dates-from",
-                   metavar="REF",
-                   help="sample the dates of this ref or stats file (e.g. the reference), so the two compare")
-    p.add_argument("--bees", nargs="+", choices=DUMP_BEES, default=list(DUMP_BEES), help="sections to write")
-    p.add_argument("-o",
-                   "--output",
-                   default="-",
-                   help="output file, YAML for .yaml/.yml, otherwise JSON (default: JSON to stdout)")
-    return guarded("hive dump", _hive_dump)(p.parse_args(argv))
+  hive compare hive/ref.yaml checks/data.ref.yaml
+  hive compare hive/ref.yaml checks/data.ref.yaml --spec checks/data.yaml --format markdown --all
+
+meta: differences are ERROR (structure: variables, shapes, dates, grid), WARNING (other metadata) or
+INFO, churn (uuid, timestamps, provenance, recipe) is ignored; the spec's `reference_policy` overrides
+this. stats: values are identical, close (|diff| <= atol-stdev * stdev) or differ. Exit code 1 if a
+difference reaches --fail-on. See docs/meta-bee.md and docs/stats-bee.md.""")
+    p.add_argument("dump", help="ref file to check")
+    p.add_argument("reference", help="reference ref file")
+    p.add_argument("--spec", help="dataset spec YAML (reference_policy, tolerances.compare_atol_stdev)")
+    p.add_argument("--atol-stdev", type=float, help="override tolerances.compare_atol_stdev")
+    p.add_argument("--format", choices=("text", "json", "markdown"), default="text")
+    p.add_argument("--fail-on", choices=("error", "warning"), default="error")
+    p.add_argument("--all", action="store_true", help="list identical items too")
+    p.add_argument("--strict", action="store_true", help="fail when a section is in only one of the files")
+    return guarded("hive compare", _hive_compare)(p.parse_args(argv))
 
 
-def _hive_dump(args: Namespace) -> int:
-    dataset, spec = Dataset(args.dataset), load_spec(args.spec)
-    dates_from = Path(args.dates_from) if args.dates_from else None
-    if dates_from is not None and not dates_from.is_file():
-        raise FileNotFoundError(f"--dates-from not found: {dates_from}")
-    sections = {bee: _bee_cli(bee).dump_section(dataset, spec, dates_from) for bee in args.bees}
-    save_ref(sections, args.output)
-    return EXIT_OK
+def _ref_sections(path: Path) -> list[str]:
+    """The sections of the ref file `path`; ValueError for anything else, e.g. a zarr."""
+    if path.is_dir():
+        raise ValueError(f"{path}: a dataset, not a ref file: write its dump with `hive {path} --out DIR` and "
+                         "compare DIR/ref.yaml")
+    if not path.is_file():
+        raise FileNotFoundError(f"not found: {path}")
+    if file_format(path) != REF_FORMAT:
+        raise ValueError(f"{path}: not a ref file of format {REF_FORMAT!r} (write one with `hive ... --out`)")
+    return [key for key in read_file(path, REF_FORMAT, "ref file") if key != "format"]
+
+
+def _hive_compare(args: Namespace) -> int:
+    dump, reference = Path(args.dump), Path(args.reference)
+    in_dump, in_reference, spec = _ref_sections(dump), _ref_sections(reference), load_spec(args.spec)
+    report, tables = Report(dataset=f"{dump} vs {reference}"), []
+    for section in sorted(set(in_dump) | set(in_reference),
+                          key=lambda s: (s not in BEES, BEES.index(s) if s in BEES else 0, s)):
+        if not has_dump(section):
+            report.add(section, "compare", [skipped(f"no comparison for section `{section}`")])
+        elif section not in in_dump or section not in in_reference:
+            missing = dump if section not in in_dump else reference
+            report.add(section, "compare", [skipped(f"no `{section}` section in {missing}")])
+        else:
+            # The bee loads its own section, checking its format.
+            findings, table = _bee_cli(section).compare_section(dump, reference, spec, args)
+            report.add(section, "compare", findings)
+            if table:
+                tables.append(table)
+    _print_report(report, args, "\n".join(tables))
+    return report.exit_code(Severity[args.fail_on.upper()], strict=args.strict)
 
 
 def _bee_cli(bee: str) -> Any:
@@ -189,15 +236,12 @@ def _bee_main(bee: str, description: str, argv: list[str] | None, extra: Sequenc
 
 
 def meta_bee_main(argv: list[str] | None = None) -> int:
-    return _bee_main("meta", "Check metadata and structure of an anemoi dataset, and write and compare meta "
-                     "files. See docs/meta-bee.md.",
-                     argv,
-                     extra=_subcommands("meta"))
+    return _bee_main("meta", "Check metadata and structure of an anemoi dataset. See docs/meta-bee.md.", argv)
 
 
 def stats_bee_main(argv: list[str] | None = None) -> int:
-    return _bee_main("stats", "Check values and statistics of an anemoi dataset, and write and compare "
-                     "stats files. See docs/stats-bee.md.",
+    return _bee_main("stats", "Check values and statistics of an anemoi dataset, and calibrate tolerances. "
+                     "See docs/stats-bee.md.",
                      argv,
                      extra=_subcommands("stats"))
 

@@ -6,7 +6,7 @@
 """Shared core of the hive: findings, dataset access, spec, registry, sampling, sources."""
 from .dataset import Dataset
 from .findings import Finding, Report, Severity, error, info, skipped, warning
-from .registry import BEES, CheckContext, check, checks_for, run
+from .registry import BEES, CheckContext, bee_dump, check, checks_for, collect_dumps, dumps, has_dump, run
 from .sources import NotComparable, Source, load_source
 from .spec import BBox, PhysicalRange, ReferencePolicy, Spec, VariableSpec, load_spec
 
@@ -24,8 +24,12 @@ __all__ = [
     "Source",
     "Spec",
     "VariableSpec",
+    "bee_dump",
     "check",
     "checks_for",
+    "collect_dumps",
+    "dumps",
+    "has_dump",
     "error",
     "info",
     "load_source",

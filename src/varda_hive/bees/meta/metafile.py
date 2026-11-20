@@ -3,8 +3,8 @@
 # Distributed under the terms of the BSD 3-Clause License.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-"""Meta files: a small fingerprint of a dataset's metadata and structure, written by `meta-bee dump`
-and compared by `meta-bee compare` and the `matches_reference` check.
+"""Meta files: a small fingerprint of a dataset's metadata and structure, meta-bee's dump: the
+`meta` section of `ref.yaml` (`--out`), compared by the `matches_reference` check and `hive compare`.
 
 A meta file holds:
 - `attrs`: the whole `.zattrs`
@@ -142,7 +142,7 @@ def save_meta(meta: dict, path: str | Path | None) -> None:
 
 
 def load_meta(path: str | Path) -> dict:
-    return read_file(path, FORMAT, "meta file", "meta-bee dump", section="meta")
+    return read_file(path, FORMAT, "meta file", "hive ... --out", section="meta")
 
 
 def load_reference(path: str | Path) -> dict:

@@ -46,7 +46,7 @@ def test_meta_clean_without_spec(dataset_path):
 
 
 def test_stats_finite_values(dataset_path):
-    spec = Spec(sampling={"n_dates": 1, "include_dates": [3]})
+    spec = Spec(sampling={"n_dates": 1, "include_dates": ["2020-03-01T03:00:00"]})
     assert _errors(dataset_path, "stats", spec) == []
     zarr.open_group(str(dataset_path), mode="r+")["data"][3, 1] = np.nan
     [f] = _errors(dataset_path, "stats", spec)
@@ -55,7 +55,7 @@ def test_stats_finite_values(dataset_path):
 
 def test_stats_inf_is_an_error_not_a_crash(dataset_path):
     zarr.open_group(str(dataset_path), mode="r+")["data"][3, 1, 0, 0] = np.inf
-    spec = Spec(sampling={"n_dates": 1, "include_dates": [3]})
+    spec = Spec(sampling={"n_dates": 1, "include_dates": ["2020-03-01T03:00:00"]})
     [f] = _errors(dataset_path, "stats", spec)
     assert (f.check, f.message, f.variable) == ("finite_values", "1 infinite values", "T_2M")
     # allow_nans does not allow inf
@@ -79,7 +79,7 @@ def test_stats_missing_dates_are_not_sampled(dataset_path):
     attrs["missing_dates"] = ["2020-03-01T03:00:00", "2020-03-01T05:00:00"]
     (dataset_path / ".zattrs").write_text(json.dumps(attrs))
     zarr.open_group(str(dataset_path), mode="r+")["data"][[3, 5]] = np.nan  # what anemoi leaves there
-    spec = Spec(sampling={"n_dates": "all", "include_dates": [3]})
+    spec = Spec(sampling={"n_dates": "all", "include_dates": ["2020-03-01T03:00:00"]})
     assert Dataset(dataset_path).missing_indices == {3, 5}
     stats = compute_stats(Dataset(dataset_path), spec)
     assert "2020-03-01T03:00:00" not in stats["sampling"]["dates"]
@@ -139,7 +139,7 @@ def _spot_summary(path, spec):
 
 def test_spot_matches_source(dataset_path, tmp_path):
     reference = build_dataset(tmp_path / "reference.zarr")  # identical copy
-    spec = _zarr_source_spec(reference, n_dates=2, include_dates=[5])
+    spec = _zarr_source_spec(reference, n_dates=2, include_dates=["2020-03-01T05:00:00"])
     assert _errors(dataset_path, "spot", spec) == []
     assert _spot_summary(dataset_path, spec).details["identical"] == VARIABLES
     zarr.open_group(str(dataset_path), mode="r+")["data"][5, 3] += 1.0
@@ -181,10 +181,10 @@ def test_spot_infinite_difference_is_valid_json(dataset_path, tmp_path):
 def test_spot_samples_same_dates_as_stats(dataset_path, tmp_path):
     from varda_hive.bees.stats.statsfile import sample_indices  # pylint: disable=import-outside-toplevel
     from varda_hive.honeycomb.sampling import sample_time_indices  # pylint: disable=import-outside-toplevel
-    spec = Spec(sampling={"n_dates": 3, "include_dates": [6], "seed": 3})
+    spec = Spec(sampling={"n_dates": 3, "include_dates": ["2020-03-01T06:00:00"], "seed": 3})
     ds = Dataset(dataset_path)
     picked, _ = sample_indices(ds, spec)
-    assert sample_time_indices(len(ds.dates), spec.sampling, exclude=ds.missing_indices) == sorted(picked)
+    assert sample_time_indices(spec, ds.dates, ds.missing_indices) == sorted(picked)
 
 
 def test_spot_not_comparable_and_ensemble(dataset_path, tmp_path):
@@ -313,7 +313,7 @@ def test_stats_statistics_consistent_exact(dataset_path):
 def test_stats_spike_outside_the_point_subset(dataset_path, write_spec):
     spec = load_spec(
         write_spec("variables: {T_2M: {min: 200.0, max: 330.0, units: K}}\n"
-                   "sampling: {n_dates: 1, n_points: 5, include_dates: [6]}\n"))
+                   "sampling: {n_dates: 1, n_points: 5, include_dates: [2020-03-01T06:00:00]}\n"))
     outside = int(np.setdiff1d(np.arange(NG), sample_points(NG, spec.sampling))[0])
     data = zarr.open_group(str(dataset_path), mode="r+")["data"]
     data[6, 1, 0, outside] = 400.0
@@ -328,7 +328,7 @@ def test_stats_spike_outside_the_point_subset(dataset_path, write_spec):
 def test_stats_physical_ranges(dataset_path, write_spec):
     spec = load_spec(
         write_spec("variables: {T_2M: {min: 200.0, max: 330.0, units: K}, U_10M: {units: m s-1}}\n"
-                   "sampling: {n_dates: 1, include_dates: [6]}\n"))
+                   "sampling: {n_dates: 1, include_dates: [2020-03-01T06:00:00]}\n"))
     assert _stats_findings(dataset_path, spec, "physical_ranges") == []
     zarr.open_group(str(dataset_path), mode="r+")["data"][6, 1, 0, 0] = 400.0
     [f] = _stats_findings(dataset_path, spec, "physical_ranges")
@@ -365,7 +365,8 @@ def test_stats_constant_field_not_listed(dataset_path):
 
 
 def test_stats_matches_reference_stats(dataset_path, tmp_path, write_spec):
-    save_stats(compute_stats(Dataset(dataset_path), Spec(sampling={"n_dates": 3})), tmp_path / "ref.json")
+    # the reference of the same spec: the same sample
+    save_stats(compute_stats(Dataset(dataset_path), Spec(sampling={"n_dates": 1, "seed": 7})), tmp_path / "ref.json")
     spec = load_spec(write_spec("reference: ref.json\nsampling: {n_dates: 1, seed: 7}\n"))
     assert _stats_findings(dataset_path, spec, "matches_reference_stats") == []
     zarr.open_group(str(dataset_path), mode="r+")["data"][:, 3] *= 2

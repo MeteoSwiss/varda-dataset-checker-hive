@@ -6,6 +6,8 @@
 
 import json
 
+import numpy as np
+
 from pydantic import ValidationError
 import pytest
 
@@ -27,7 +29,7 @@ from varda_hive.honeycomb import (
 from varda_hive.honeycomb.findings import Report
 from varda_hive.honeycomb.registry import _REGISTRY, check
 from varda_hive.honeycomb.report import to_json, to_text
-from varda_hive.honeycomb.sampling import random_time_indices, sample_points, sample_time_indices
+from varda_hive.honeycomb.sampling import random_time_indices, sample_points, sample_time_indices, sampled_dates
 
 from conftest import NT, VARIABLES
 
@@ -56,9 +58,9 @@ def test_spec_resolves_relative_paths(write_spec, tmp_path):
     assert spec.sampling.n_dates == 2
 
 
-def test_spec_checks_files(write_spec):
-    with pytest.raises(FileNotFoundError, match="reference not found"):
-        load_spec(write_spec("reference: nope.yaml\n"))
+def test_spec_checks_files(write_spec, tmp_path):
+    # a missing reference is the first reference: the reference checks skip, `--out` writes it
+    assert load_spec(write_spec("reference: nope.yaml\n")).reference == tmp_path / "nope.yaml"
     with pytest.raises(FileNotFoundError, match="calibrated_tolerances not found"):
         load_spec(write_spec("calibrated_tolerances: nope.yaml\n"))
     for removed in ("ranges_file", "variables_file", "reference_meta", "reference_stats"):
@@ -131,8 +133,8 @@ def test_sampling_excludes_indices():
             spec = Spec(sampling={"n_dates": n_dates})
             picked = random_time_indices(10, spec.sampling, stratified=stratified, exclude={2, 3, 4})
             assert picked and not {2, 3, 4} & set(picked)
-    spec = Spec(sampling={"n_dates": 4, "include_dates": [3]})
-    assert 3 not in sample_time_indices(10, spec.sampling, exclude={3})
+    spec = Spec(sampling={"n_dates": 4, "include_dates": ["2020-03-01T03:00:00"]})
+    assert 3 not in sample_time_indices(spec, _dates(10), {3})
     # nothing excluded: the same draw as before
     assert random_time_indices(100, spec.sampling, stratified=True) == \
         random_time_indices(100, spec.sampling, stratified=True, exclude={200})
@@ -154,12 +156,44 @@ def test_strict_fails_on_skipped():
     assert report.exit_code() == 0 and report.exit_code(strict=True) == 1
 
 
+def _dates(n, start="2020-03-01T00:00:00"):
+    return np.datetime64(start, "s") + np.arange(n) * np.timedelta64(3600, "s")
+
+
 def test_sampling_is_seeded_and_includes_dates():
-    spec = Spec(sampling={"seed": 3, "n_dates": 3, "include_dates": [7]})
-    a = sample_time_indices(100, spec.sampling)
-    assert a == sample_time_indices(100, spec.sampling)
+    spec = Spec(sampling={"seed": 3, "n_dates": 3, "include_dates": ["2020-03-01T07:00:00"]})
+    a = sample_time_indices(spec, _dates(100))
+    assert a == sample_time_indices(spec, _dates(100))
     assert 7 in a and len(a) in (3, 4)
     assert len(sample_points(10, spec.sampling)) == 10
+
+
+def test_sampling_follows_the_spec_period():
+    """Drawn on the spec's period, the sample is the same on every dataset that has those dates; without a
+    period it is drawn on the dataset's dates."""
+    period = {"start_date": "2020-03-01T00:00:00", "end_date": "2020-03-02T23:00:00", "frequency": "1h"}
+    spec = Spec(sampling={"seed": 1, "n_dates": 5}, **period)
+    picked, absent = sampled_dates(spec, _dates(48))
+    assert len(picked) == 5 and not absent
+    longer = sampled_dates(spec, _dates(60))[0]
+    assert longer == picked  # extra dates in the dataset don't move the sample
+    shifted, absent = sampled_dates(spec, _dates(72, start="2020-02-29T00:00:00"))  # the same dates, other indices
+    assert sorted(t - 24 for t in shifted) == sorted(picked) and not absent
+    shorter, absent = sampled_dates(spec, _dates(12))
+    assert set(shorter) <= set(picked) and len(shorter) + len(absent) == 5  # the dataset lacks the others
+    # the spec's missing_dates are never drawn; the dataset's only count without them
+    first = str(_dates(48)[min(picked)])
+    without = sampled_dates(Spec(sampling={"seed": 1, "n_dates": 5}, missing_dates=[first], **period), _dates(48))[0]
+    assert min(picked) not in without
+    # no period: drawn on the dataset's dates, so another time axis gives another sample
+    bare = Spec(sampling={"seed": 1, "n_dates": 5})
+    assert sampled_dates(bare, _dates(48))[0] == picked
+    assert sampled_dates(bare, _dates(60))[0] != picked
+
+
+def test_include_dates_are_dates():
+    with pytest.raises(ValidationError, match="not time indices"):
+        Spec(sampling={"include_dates": [3]})
 
 
 def test_report_exit_codes():
