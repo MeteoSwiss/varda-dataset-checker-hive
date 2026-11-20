@@ -56,6 +56,9 @@ def calibrate(  # pylint: disable=too-many-locals
         raise ValueError("nothing to calibrate: with `n_dates: all` the dates are not sampled")
     key = sampling_key(ds, spec)
     n = key["n_estimate"]
+    if n == 0:
+        raise ValueError("nothing to calibrate: no randomly sampled date falls in the statistics window "
+                         "(check the spec's period against statistics_start_date/statistics_end_date)")
     window = statistics_window(ds)
     dates = random_time_indices(len(ds.dates),
                                 spec.sampling.model_copy(update={"n_dates": n_calib}),

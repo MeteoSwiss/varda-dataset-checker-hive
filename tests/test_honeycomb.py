@@ -31,7 +31,8 @@ from varda_hive.honeycomb.dataset import is_zarr
 from varda_hive.honeycomb.findings import Report
 from varda_hive.honeycomb.registry import _REGISTRY, check
 from varda_hive.honeycomb.report import to_json, to_text
-from varda_hive.honeycomb.sampling import random_time_indices, sample_points, sample_time_indices, sampled_dates
+from varda_hive.honeycomb.sampling import (random_time_indices, sample_axis, sample_points, sample_time_indices,
+                                           sampled_dates)
 
 from conftest import NG, NT, VARIABLES, build_dataset
 
@@ -304,3 +305,19 @@ def test_attrs_follow_the_opened_format(dataset_path_v3):
     """A `.zattrs` left behind by a conversion to format 3 is not read."""
     (dataset_path_v3 / ".zattrs").write_text(json.dumps({"variables": ["STALE"]}))
     assert Dataset(dataset_path_v3).variables == VARIABLES
+
+
+def test_spec_must_be_a_mapping(write_spec):
+    with pytest.raises(ValueError, match="a spec is a mapping of fields, got a list"):
+        load_spec(write_spec("- variables: [T_2M]\n"))
+    with pytest.raises(ValueError, match="`base_dir` is not a spec field"):
+        load_spec(write_spec("base_dir: /tmp\n"))
+
+
+def test_spec_dates_with_offset_are_utc(dataset_path):
+    """meta-bee and the sample read a spec date with an offset the same way: converted to UTC."""
+    spec = Spec(start_date="2020-03-01T01:00:00+01:00", end_date="2020-03-01T08:00:00+01:00", frequency="1h")
+    ds = Dataset(dataset_path)
+    np.testing.assert_array_equal(sample_axis(spec, ds.dates), ds.dates)
+    report = run(CheckContext(ds, spec), bees=["meta"], select=["dates_match_spec"])
+    assert report.count(Severity.ERROR) == 0, report.findings

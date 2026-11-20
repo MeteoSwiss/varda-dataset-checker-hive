@@ -10,12 +10,11 @@ The sample is defined by the spec alone: the dates are drawn on the spec's perio
 samples the same dates, and a reference written from one compares with the next. Changing the
 sampling or the period in the spec changes the sample: an intended change, accepted with a new
 reference. Only a spec without a period falls back to the dataset's dates."""
-from datetime import datetime
 from typing import Collection
 
 import numpy as np
 
-from .dataset import parse_date, parse_frequency
+from .dataset import parse_frequency, spec_date
 from .spec import Sampling, Spec
 
 
@@ -52,16 +51,12 @@ def random_time_indices(n_times: int,
     return sorted(rng.choice(candidates, size=min(n, len(candidates)), replace=False).tolist())
 
 
-def _date(value: datetime) -> np.datetime64:
-    return parse_date(value.replace(tzinfo=None).isoformat())
-
-
 def sample_axis(spec: Spec, dates: np.ndarray) -> np.ndarray:
     """The time axis the sample is drawn on: the spec's period when it has `start_date`, `end_date`
     and `frequency`, else the dataset's `dates`."""
     if spec.start_date is None or spec.end_date is None or spec.frequency is None:
         return np.asarray(dates).astype("datetime64[s]")
-    start, end = _date(spec.start_date), _date(spec.end_date)
+    start, end = spec_date(spec.start_date), spec_date(spec.end_date)
     axis = np.arange(start, end + np.timedelta64(1, "s"), parse_frequency(spec.frequency))
     return axis.astype("datetime64[s]")
 
@@ -74,11 +69,11 @@ def sampled_dates(spec: Spec, dates: np.ndarray, missing: Collection[int] = ()) 
     dates = np.asarray(dates).astype("datetime64[s]")
     axis = sample_axis(spec, dates)
     if spec.missing_dates is not None:
-        skip = np.array([_date(d) for d in spec.missing_dates], dtype="datetime64[s]")
+        skip = np.array([spec_date(d) for d in spec.missing_dates], dtype="datetime64[s]")
     else:
         skip = dates[sorted(missing)]
     exclude = set(np.flatnonzero(np.isin(axis, skip)).tolist())
-    wanted = {str(_date(d)): False for d in spec.sampling.include_dates}
+    wanted = {str(spec_date(d)): False for d in spec.sampling.include_dates}
     wanted |= {
         str(axis[i]): True
         for i in random_time_indices(len(axis), spec.sampling, stratified=True, exclude=exclude)

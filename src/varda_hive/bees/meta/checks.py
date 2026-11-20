@@ -19,7 +19,7 @@ from typing import Any, Iterator
 import numpy as np
 
 from ...honeycomb import CheckContext, Finding, bee_dump, check, dumps, error, info, skipped, warning
-from ...honeycomb.dataset import STATISTICS, Dataset, format_frequency, parse_date, parse_frequency
+from ...honeycomb.dataset import STATISTICS, Dataset, format_frequency, parse_date, parse_frequency, spec_date
 from ...honeycomb.files import provides
 from .metafile import FORMAT, compare_meta, fingerprint, load_reference
 
@@ -248,9 +248,9 @@ def dates_match_spec(ctx: CheckContext) -> Iterator[Finding]:
         return
     for key, expected, actual in (("start_date", spec.start_date, ds.dates[0]), ("end_date", spec.end_date,
                                                                                  ds.dates[-1])):
-        if expected is not None and parse_date(expected.isoformat()) != actual:
+        if expected is not None and spec_date(expected) != actual:
             yield error(f"dates {'start' if key == 'start_date' else 'end'} at {actual}, the spec's `{key}` is "
-                        f"{expected.isoformat()}")
+                        f"{spec_date(expected)}")
     if spec.frequency is not None:
         step = _step(ds)
         if step is not None and step != parse_frequency(spec.frequency):
@@ -293,7 +293,7 @@ def flags_match_spec(ctx: CheckContext) -> Iterator[Finding]:
         yield from _compare_allow_nans(attrs.get("allow_nans", False), expected_nans)
     if spec.missing_dates is not None:
         actual = {parse_date(d) for d in attrs.get("missing_dates") or []}
-        expected = {parse_date(d.isoformat()) for d in spec.missing_dates}
+        expected = {spec_date(d) for d in spec.missing_dates}
         for d in sorted(actual - expected):
             yield error("date listed in `missing_dates` but not in the spec's", time=str(d))
         for d in sorted(expected - actual):

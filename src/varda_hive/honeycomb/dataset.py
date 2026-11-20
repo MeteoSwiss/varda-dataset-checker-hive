@@ -8,6 +8,7 @@ anemoi-datasets, so checks see exactly what is stored on disk.
 
 The group attributes are read straight from the json file (`.zattrs` for format 2, the `attributes` of
 the root `zarr.json` for format 3), so meta-bee stays cheap; arrays are read through zarr."""
+from datetime import datetime, timezone
 from functools import cached_property
 import json
 from pathlib import Path
@@ -41,6 +42,13 @@ def parse_frequency(value: str | int) -> np.timedelta64:
 def parse_date(value: Any) -> np.datetime64:
     """A date attribute (`2020-03-01T00:00:00`, `2020-03-01 00:00:00`, trailing `Z`) to the second."""
     return np.datetime64(str(value).replace(" ", "T").removesuffix("Z"), "s")
+
+
+def spec_date(value: datetime) -> np.datetime64:
+    """A spec date as a dataset date: an offset is converted to UTC, a date without one is UTC."""
+    if value.tzinfo is not None:
+        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    return np.datetime64(value, "s")
 
 
 def format_frequency(step: np.timedelta64) -> str:

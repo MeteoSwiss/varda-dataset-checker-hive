@@ -249,3 +249,10 @@ def test_old_stats_files_are_rejected(tmp_path):
     (tmp_path / "old.json").write_text(json.dumps({"format": "varda-hive-stats/2"}))
     with pytest.raises(ValueError, match="replace it with the `ref.yaml` of `hive ... --out`"):
         load_stats(tmp_path / "old.json")
+
+
+def test_calibrate_without_random_dates_in_window(dataset_path):
+    """A spec period outside the dataset: no random date to estimate from, a clear configuration error."""
+    spec = Spec(start_date="2021-01-01T00:00:00", end_date="2021-01-02T00:00:00", frequency="1h")
+    with pytest.raises(ValueError, match="no randomly sampled date falls in the statistics window"):
+        calibrate(Dataset(dataset_path), spec, n_calib=8)

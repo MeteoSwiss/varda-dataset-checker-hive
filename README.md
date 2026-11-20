@@ -179,7 +179,7 @@ paths resolve against the spec file's directory.
 | `variables.<name>.constant` | stats-bee | `true`: never changes in time (used when the dataset lists no `constant_fields`) |
 | `variables.<name>.<key>` | meta-bee | any other key (`param`, `levtype`, `levelist`, `process`, ...): expected in `variables_metadata.<name>`, at its top or in `mars` |
 | `anchors` | none | a place for YAML anchors shared by several variables |
-| `start_date`, `end_date`, `frequency` | meta-bee | expected first and last date, and step |
+| `start_date`, `end_date`, `frequency` | meta-bee | expected first and last date, and step; dates are UTC (an offset such as `+01:00` is converted) |
 | `grid_points`, `resolution`, `bbox` | meta-bee | expected grid size, `resolution` attribute, extent `{lat_min, lat_max, lon_min, lon_max, tolerance}` |
 | `allow_nans` | meta-bee, stats-bee | `true`, `false` or a list of variables; with a `variables` mapping, set it per variable instead |
 | `missing_dates` | meta-bee | expected `missing_dates` |

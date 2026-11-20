@@ -6,7 +6,9 @@
 """Meta files: fingerprint, round trip, and the comparison policy."""
 import json
 
+import numpy as np
 import pytest
+import zarr
 
 from conftest import VARIABLES, build_dataset
 from varda_hive.honeycomb import Dataset, ReferencePolicy, Severity
@@ -135,3 +137,14 @@ def test_zarr_and_meta_file_reference_agree(dataset_path, tmp_path):
     from_zarr = compare_meta(actual, load_reference(reference))
     from_file = compare_meta(actual, load_reference(tmp_path / "ref.meta.yaml"))
     assert from_zarr.items == from_file.items
+
+
+def test_fingerprint_ignores_byte_order(tmp_path):
+    """A big-endian array (possible in zarr format 2) fingerprints as its native-order copy in format 3."""
+    v2 = build_dataset(tmp_path / "v2.zarr")
+    group = zarr.open_group(str(v2), mode="r+")
+    group.create_array("mean", data=group["mean"][:].astype(">f8"), overwrite=True)
+    assert group["mean"].dtype == np.dtype(">f8")
+    big = fingerprint(Dataset(v2))["arrays"]
+    native = fingerprint(Dataset(build_dataset(tmp_path / "v3.zarr", zarr_format=3)))["arrays"]
+    assert big["mean"] == native["mean"] and big["mean"]["dtype"] == "float64"

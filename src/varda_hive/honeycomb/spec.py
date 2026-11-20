@@ -254,6 +254,10 @@ def load_spec(path: str | Path | None) -> Spec:
         return Spec()
     path = Path(path)
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path}: a spec is a mapping of fields, got a {type(raw).__name__}")
+    if "base_dir" in raw:
+        raise ValueError(f"{path}: `base_dir` is not a spec field (it is the spec's directory)")
     spec = Spec(**raw, base_dir=path.resolve().parent)
     for key in ("reference", "calibrated_tolerances"):
         value = getattr(spec, key)

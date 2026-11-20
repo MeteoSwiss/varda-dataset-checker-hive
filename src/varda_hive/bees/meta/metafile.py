@@ -115,14 +115,20 @@ def _summary(values: np.ndarray) -> str:
     return f"{values.size} values"
 
 
+def _native(dtype: np.dtype) -> np.dtype:
+    """`dtype` in native byte order, so the fingerprint does not depend on how the store encodes it."""
+    return dtype.newbyteorder("=") if dtype.byteorder in "<>" else dtype
+
+
 def fingerprint(ds: Dataset) -> dict[str, Any]:
     """The meta file content of a dataset. Reads the group attributes and every array except `data`."""
     arrays: dict[str, dict[str, Any]] = {}
     for name in ds.arrays:
         array = ds.array(name)
-        entry: dict[str, Any] = {"shape": list(array.shape), "dtype": str(array.dtype)}
+        entry: dict[str, Any] = {"shape": list(array.shape), "dtype": str(_native(array.dtype))}
         if name != "data":
-            values = np.ascontiguousarray(ds.values(name))
+            values = ds.values(name)
+            values = np.ascontiguousarray(values, dtype=_native(values.dtype))
             entry["values"] = hashlib.sha256(values.tobytes()).hexdigest()
             entry["summary"] = _summary(values)
         arrays[name] = entry
