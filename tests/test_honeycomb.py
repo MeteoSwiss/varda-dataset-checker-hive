@@ -285,3 +285,22 @@ def test_arrays_ignores_stray_files(dataset_path_v3, recwarn):
     (dataset_path_v3 / ".snakemake_timestamp").write_text("")
     assert "data" in Dataset(dataset_path_v3).arrays
     assert not [w for w in recwarn if "Zarr hierarchy" in str(w.message)]
+
+
+@pytest.mark.filterwarnings("ignore:Consolidated metadata is currently not part")
+@pytest.mark.parametrize("zarr_format", [2, 3])
+def test_dataset_ignores_stale_consolidated_metadata(tmp_path, zarr_format):
+    """Checks see the arrays on disk, not a consolidated snapshot taken before a change."""
+    path = build_dataset(tmp_path / "ds.zarr", zarr_format=zarr_format)
+    zarr.consolidate_metadata(str(path))
+    group = zarr.open_group(str(path), mode="r+", use_consolidated=False)
+    group.create_array("extra", data=np.zeros(3))
+    group.create_array("data", data=np.zeros((NT + 2, len(VARIABLES), 1, NG), "f4"), overwrite=True)
+    ds = Dataset(path)
+    assert "extra" in ds.arrays and ds.data.shape[0] == NT + 2
+
+
+def test_attrs_follow_the_opened_format(dataset_path_v3):
+    """A `.zattrs` left behind by a conversion to format 3 is not read."""
+    (dataset_path_v3 / ".zattrs").write_text(json.dumps({"variables": ["STALE"]}))
+    assert Dataset(dataset_path_v3).variables == VARIABLES

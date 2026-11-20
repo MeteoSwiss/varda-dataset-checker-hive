@@ -73,15 +73,16 @@ class Dataset:
         self.path = Path(path)
         if not is_zarr(self.path):
             raise FileNotFoundError(f"not a zarr dataset (no .zattrs or zarr.json group): {self.path}")
-        self.root = zarr.open_group(str(self.path), mode="r")
+        # not the consolidated metadata (zarr 3's default): checks must see the arrays on disk
+        self.root = zarr.open_group(str(self.path), mode="r", use_consolidated=False)
 
     @cached_property
     def attrs(self) -> dict[str, Any]:
-        """The group attributes, for either zarr format."""
-        zattrs = self.path / ".zattrs"
-        if zattrs.is_file():
-            return json.loads(zattrs.read_text())
-        return dict((_zarr_json(self.path) or {}).get("attributes") or {})
+        """The group attributes, from the same format zarr opened: `zarr.json` wins over a `.zattrs`
+        left behind, as in zarr 3."""
+        if (meta := _zarr_json(self.path)) is not None:
+            return dict(meta.get("attributes") or {})
+        return json.loads((self.path / ".zattrs").read_text())
 
     def array(self, name: str) -> zarr.Array:
         """The array `name`; TypeError if it is a group."""
