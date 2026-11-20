@@ -6,7 +6,7 @@ A hive of slim tools ("bees") that check anemoi datasets for faults. Each bee co
 
 | command | layer | reads |
 |---|---|---|
-| `meta-bee` | metadata and structure: internal consistency, variables, dates, frequency, grid, per-variable metadata, reference diff ([docs](docs/meta-bee.md)) | `.zattrs` and small arrays only |
+| `meta-bee` | metadata and structure: internal consistency, variables, dates, frequency, grid, per-variable metadata, reference diff ([docs](docs/meta-bee.md)) | group attributes (`.zattrs` or `zarr.json`) and small arrays only |
 | `stats-bee` | values: NaNs, constant fields, physical ranges, stored vs recomputed statistics, reference statistics ([docs](docs/stats-bee.md)) | sampled time steps |
 | `spot-bee` | sampled (time, variable, grid points) vs the original source, e.g. GRIB via a grib-index DB: what is identical, what differs ([docs](docs/spot-bee.md)) | sampled time steps + source |
 | `hive` | runs all bees and merges their findings | |
@@ -210,6 +210,8 @@ Put it in `src/varda_hive/bees/<bee>/checks.py`. Then add a test showing that it
 clean synthetic dataset and fires on a broken one, as in `tests/test_bees.py`.
 
 ## Development
+
+Datasets in zarr format 2 and 3 are both supported; the hive needs zarr-python >= 3.1.
 
 ```bash
 uv sync && uv run pytest

@@ -6,6 +6,7 @@
 """Each template check passes on a clean dataset and fires on a broken one."""
 import json
 from pathlib import Path
+import shutil
 import warnings
 
 import numpy as np
@@ -191,7 +192,7 @@ def test_spot_not_comparable_and_ensemble(dataset_path, tmp_path):
     """A plug-in raising NotComparable gives one INFO; every ensemble member is compared."""
     group = zarr.open_group(str(dataset_path), mode="r+")
     two = np.concatenate([group["data"][:]] * 2, axis=2)
-    group.create_dataset("data", data=two, chunks=(1, len(VARIABLES), 2, NG), overwrite=True)
+    group.create_array("data", data=two, chunks=(1, len(VARIABLES), 2, NG), overwrite=True)
     (tmp_path / "ens_source.py").write_text(
         "import numpy as np\n"
         "from varda_hive.honeycomb import Dataset, NotComparable\n"
@@ -202,7 +203,7 @@ def test_spot_not_comparable_and_ensemble(dataset_path, tmp_path):
         "        t = list(self.ds.dates).index(date)\n"
         "        return self.ds.data[t, self.ds.index(variable)]\n")
     reference = tmp_path / "reference.zarr"
-    zarr.copy_store(zarr.DirectoryStore(str(dataset_path)), zarr.DirectoryStore(str(reference)))
+    shutil.copytree(dataset_path, reference)
     spec = Spec(source={
         "plugin": "ens_source.py:S",
         "args": {
@@ -225,9 +226,9 @@ def test_spot_template_zarr_source_ensemble(dataset_path, tmp_path):
     a variable the reference lacks as not comparable."""
     group = zarr.open_group(str(dataset_path), mode="r+")
     two = np.concatenate([group["data"][:]] * 2, axis=2)
-    group.create_dataset("data", data=two, chunks=(1, len(VARIABLES), 2, NG), overwrite=True)
+    group.create_array("data", data=two, chunks=(1, len(VARIABLES), 2, NG), overwrite=True)
     reference = tmp_path / "spec_dir" / "reference.zarr"
-    zarr.copy_store(zarr.DirectoryStore(str(dataset_path)), zarr.DirectoryStore(str(reference)))
+    shutil.copytree(dataset_path, reference)
     attrs = json.loads((reference / ".zattrs").read_text())
     attrs["variables"] = VARIABLES[:-1]  # V_10M not in the reference
     (reference / ".zattrs").write_text(json.dumps(attrs))

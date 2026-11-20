@@ -1,8 +1,9 @@
 # meta-bee
 
-meta-bee checks the metadata and structure of an anemoi dataset. It reads `.zattrs` and the small
-arrays (dates, coordinates, statistics), never `data`, so it takes about a second even on large
-datasets. It does not need anemoi-datasets.
+meta-bee checks the metadata and structure of an anemoi dataset. It reads the group attributes
+(`.zattrs` in zarr format 2, the root `zarr.json` in format 3) and the small arrays (dates,
+coordinates, statistics), never `data`, so it takes about a second even on large datasets. It does
+not need anemoi-datasets.
 
 ```bash
 uv run meta-bee check data.zarr --spec checks/data.yaml           # all meta checks
@@ -65,12 +66,15 @@ and a list against `true` is an ERROR.
 
 ## The reference: the meta section and `compare`
 
-meta-bee's dump, the `meta` section of `ref.yaml` (written by `--out`, about 30 kB), holds the whole
-`.zattrs` and, for every array, its shape, dtype, a sha256 of its values and a short summary. `data`
+meta-bee's dump, the `meta` section of `ref.yaml` (written by `--out`, about 30 kB), holds all group
+attributes and, for every array, its shape, dtype, a sha256 of its values and a short summary. `data`
 gets only its shape and dtype. It is built once per run: `matches_reference` compares it with the
 reference's `meta` section, and `--out` writes it. Commit `ref.yaml` next to the spec once a version
 is accepted (with stats-bee's dump in its `stats` section); a rebuild is then compared with it
-without needing access to the published dataset. A zarr can be given as `--reference` instead: it is
+without needing access to the published dataset. The dump does
+not depend on the zarr format (2 or 3) and does not record it: the same content gives the same
+`meta` section, so a dataset rewritten in format 3 compares clean against a reference taken from
+format 2. A zarr can be given as `--reference` instead: it is
 fingerprinted on the fly. A spec `reference` that does not exist yet makes `matches_reference` skip
 ("reference … not found"): that run's `ref.yaml` is the first reference.
 

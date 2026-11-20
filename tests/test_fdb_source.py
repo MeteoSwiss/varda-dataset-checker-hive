@@ -51,8 +51,8 @@ def fdb(monkeypatch, dataset_path):
     monkeypatch.setitem(sys.modules, "pyfdb", types.SimpleNamespace(FDB=FakeFDB))
     z = zarr.open_group(str(dataset_path), mode="r+")
     lat, lon = grid_coordinates(NG)
-    z.create_dataset("latitudes", data=lat, overwrite=True)
-    z.create_dataset("longitudes", data=lon, overwrite=True)
+    z.create_array("latitudes", data=lat, overwrite=True)
+    z.create_array("longitudes", data=lon, overwrite=True)
     attrs = json.loads((dataset_path / ".zattrs").read_text())
     attrs["variables_metadata"]["T_2M"]["grib"] = {"paramId": 500011, "shortName": "T_2M"}
     (dataset_path / ".zattrs").write_text(json.dumps(attrs))

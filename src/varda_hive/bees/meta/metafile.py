@@ -7,7 +7,7 @@
 `meta` section of `ref.yaml` (`--out`), compared by the `matches_reference` check and `hive compare`.
 
 A meta file holds:
-- `attrs`: the whole `.zattrs`
+- `attrs`: the group attributes (`.zattrs` in zarr format 2, `zarr.json` in format 3)
 - `arrays`: for every array, its shape and dtype, and, except for `data`, a sha256 of its values
   plus a short human-readable summary (date range, coordinate extent, ...)
 
@@ -16,6 +16,10 @@ Two fingerprints compare item by item, on dotted paths (`variables_metadata.T_85
 the reference) or ignored. The severity of a difference comes from the policy: the spec's
 `reference_policy` first, then `DEFAULT_POLICY`. Run-to-run churn (uuid, timestamps, provenance,
 recipe) is ignored by default.
+
+The fingerprint does not depend on the zarr format: the same content written as format 2 or 3 gives
+the same meta file (attrs, shapes, numpy dtypes and value hashes), so a dataset rewritten in format 3
+still compares clean against a reference taken from format 2.
 
 A reference can be a meta file or a zarr: `load_reference` fingerprints a zarr on the fly, so both
 compare the same way.
@@ -112,13 +116,13 @@ def _summary(values: np.ndarray) -> str:
 
 
 def fingerprint(ds: Dataset) -> dict[str, Any]:
-    """The meta file content of a dataset. Reads `.zattrs` and every array except `data`."""
+    """The meta file content of a dataset. Reads the group attributes and every array except `data`."""
     arrays: dict[str, dict[str, Any]] = {}
     for name in ds.arrays:
-        array = ds.root[name]
+        array = ds.array(name)
         entry: dict[str, Any] = {"shape": list(array.shape), "dtype": str(array.dtype)}
         if name != "data":
-            values = np.ascontiguousarray(array[:])
+            values = np.ascontiguousarray(ds.values(name))
             entry["values"] = hashlib.sha256(values.tobytes()).hexdigest()
             entry["summary"] = _summary(values)
         arrays[name] = entry

@@ -3,8 +3,8 @@
 # Distributed under the terms of the BSD 3-Clause License.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-"""meta-bee: metadata and structure checks. Cheap: reads `.zattrs` and the small arrays (dates,
-coordinates, statistics), never `data`.
+"""meta-bee: metadata and structure checks. Cheap: reads the group attributes (`.zattrs` or
+`zarr.json`) and the small arrays (dates, coordinates, statistics), never `data`.
 
 Three groups:
 - internal consistency (no spec needed): what `anemoi-datasets validate` checks, natively and with
@@ -166,8 +166,8 @@ def shape_consistent(ctx: CheckContext) -> Iterator[Finding]:
         elif coords.shape != (n_grid, ):
             yield error(f"`{name}` has shape {list(coords.shape)}, expected [{n_grid}]")
     for name in STATISTICS:
-        if name in ds.arrays and ds.root[name].shape != (n_var, ):
-            yield error(f"statistics `{name}` has shape {list(ds.root[name].shape)}, expected [{n_var}]")
+        if name in ds.arrays and ds.array(name).shape != (n_var, ):
+            yield error(f"statistics `{name}` has shape {list(ds.array(name).shape)}, expected [{n_var}]")
 
 
 @check("meta")

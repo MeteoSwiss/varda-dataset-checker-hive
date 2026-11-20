@@ -3,13 +3,17 @@
 # Distributed under the terms of the BSD 3-Clause License.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-"""Read-only access to an anemoi dataset (zarr v2) without going through
-anemoi-datasets, so checks see exactly what is stored on disk."""
+"""Read-only access to an anemoi dataset (zarr format 2 or 3) without going through
+anemoi-datasets, so checks see exactly what is stored on disk.
+
+The group attributes are read straight from the json file (`.zattrs` for format 2, the `attributes` of
+the root `zarr.json` for format 3), so meta-bee stays cheap; arrays are read through zarr."""
 from functools import cached_property
 import json
 from pathlib import Path
 import re
 from typing import Any
+import warnings
 
 import numpy as np
 import zarr
@@ -48,8 +52,19 @@ def format_frequency(step: np.timedelta64) -> str:
     return f"{seconds}s"
 
 
+def _zarr_json(path: Path) -> dict[str, Any] | None:
+    """The root `zarr.json` of a format 3 group, None if there is none or it is not a group."""
+    try:
+        meta = json.loads((path / "zarr.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return meta if isinstance(meta, dict) and meta.get("node_type") == "group" else None
+
+
 def is_zarr(path: str | Path) -> bool:
-    return (Path(path) / ".zattrs").is_file()
+    """A zarr group: format 2 (`.zattrs`) or format 3 (`zarr.json` with `node_type: group`)."""
+    path = Path(path)
+    return (path / ".zattrs").is_file() or _zarr_json(path) is not None
 
 
 class Dataset:
@@ -57,12 +72,27 @@ class Dataset:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         if not is_zarr(self.path):
-            raise FileNotFoundError(f"not a zarr dataset (no .zattrs): {self.path}")
+            raise FileNotFoundError(f"not a zarr dataset (no .zattrs or zarr.json group): {self.path}")
         self.root = zarr.open_group(str(self.path), mode="r")
 
     @cached_property
     def attrs(self) -> dict[str, Any]:
-        return json.loads((self.path / ".zattrs").read_text())
+        """The group attributes, for either zarr format."""
+        zattrs = self.path / ".zattrs"
+        if zattrs.is_file():
+            return json.loads(zattrs.read_text())
+        return dict((_zarr_json(self.path) or {}).get("attributes") or {})
+
+    def array(self, name: str) -> zarr.Array:
+        """The array `name`; TypeError if it is a group."""
+        node = self.root[name]
+        if not isinstance(node, zarr.Array):
+            raise TypeError(f"`{name}` is not an array")
+        return node
+
+    def values(self, name: str) -> np.ndarray:
+        """All values of the array `name`."""
+        return np.asarray(self.array(name)[...])
 
     @property
     def name(self) -> str:
@@ -77,7 +107,7 @@ class Dataset:
 
     @cached_property
     def dates(self) -> np.ndarray:
-        return self.root["dates"][:].astype("datetime64[s]")
+        return self.values("dates").astype("datetime64[s]")
 
     @cached_property
     def missing_indices(self) -> frozenset[int]:
@@ -88,27 +118,30 @@ class Dataset:
 
     @cached_property
     def latitudes(self) -> np.ndarray | None:
-        return self.root["latitudes"][:] if "latitudes" in self.arrays else None
+        return self.values("latitudes") if "latitudes" in self.arrays else None
 
     @cached_property
     def longitudes(self) -> np.ndarray | None:
-        return self.root["longitudes"][:] if "longitudes" in self.arrays else None
+        return self.values("longitudes") if "longitudes" in self.arrays else None
 
     def date_str(self, t: int) -> str:
         return str(self.dates[t])
 
     @property
     def data(self) -> zarr.Array:
-        """(time, variable, ensemble, grid); index lazily, one time step is one chunk."""
-        return self.root["data"]
+        """(time, variable, ensemble, grid); index lazily, one time step is one or a few chunks."""
+        return self.array("data")
 
     def step(self, t: int) -> np.ndarray:
         """All variables at time index `t`, shape (variable, ensemble, grid)."""
-        return self.data[t]
+        return np.asarray(self.data[t])
 
     def statistic(self, name: str) -> np.ndarray:
-        return self.root[name][:]
+        return self.values(name)
 
     @cached_property
     def arrays(self) -> list[str]:
-        return sorted(self.root.array_keys())
+        # zarr 3 warns about files that are not zarr nodes (e.g. a `.snakemake_timestamp` of the build)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=".*not recognized as a component of a Zarr hierarchy")
+            return sorted(self.root.array_keys())

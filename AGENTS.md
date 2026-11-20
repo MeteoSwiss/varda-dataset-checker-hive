@@ -53,7 +53,7 @@ inside the FDB uenv, see `tests/test_fdb_realch1.py`. eccodes (`grib` extra) is 
   `src/varda_hive/cli.py` docstring describes the entry points and exit codes.
 - **Bees must stay independent**: a bee may import the honeycomb but never another bee.
   `tests/test_independence.py` enforces this by running each bee with the others unimportable.
-- `honeycomb/dataset.py` reads the zarr v2 store directly, not through anemoi-datasets
+- `honeycomb/dataset.py` reads the zarr store (format 2 or 3) directly, not through anemoi-datasets
   (optional extra), so checks see exactly what is on disk. meta-bee never reads `data`.
 
 ## Conventions not obvious from the docs

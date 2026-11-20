@@ -10,6 +10,7 @@ import numpy as np
 
 from pydantic import ValidationError
 import pytest
+import zarr
 
 from varda_hive.honeycomb import (
     BEES,
@@ -26,12 +27,13 @@ from varda_hive.honeycomb import (
     skipped,
     warning,
 )
+from varda_hive.honeycomb.dataset import is_zarr
 from varda_hive.honeycomb.findings import Report
 from varda_hive.honeycomb.registry import _REGISTRY, check
 from varda_hive.honeycomb.report import to_json, to_text
 from varda_hive.honeycomb.sampling import random_time_indices, sample_points, sample_time_indices, sampled_dates
 
-from conftest import NT, VARIABLES
+from conftest import NG, NT, VARIABLES, build_dataset
 
 
 def test_dataset_access(dataset_path):
@@ -40,6 +42,35 @@ def test_dataset_access(dataset_path):
     assert len(ds.dates) == NT
     assert ds.date_str(1) == "2020-03-01T01:00:00"
     assert ds.step(0).shape == (len(VARIABLES), 1, 50)
+
+
+@pytest.mark.parametrize("zarr_format", [2, 3])
+def test_dataset_access_both_zarr_formats(tmp_path, zarr_format):
+    path = build_dataset(tmp_path / "ds.zarr", zarr_format=zarr_format)
+    assert (path / (".zattrs" if zarr_format == 2 else "zarr.json")).is_file()
+    assert is_zarr(path)
+    ds = Dataset(path)
+    assert ds.variables == VARIABLES and ds.attrs["frequency"] == "1h"
+    assert ds.dates.dtype == np.dtype("datetime64[s]") and ds.date_str(NT - 1) == "2020-03-01T07:00:00"
+    assert ds.step(3).shape == (len(VARIABLES), 1, NG) and ds.step(3).dtype == np.float32
+    assert ds.arrays == ["data", "dates", "latitudes", "longitudes", "maximum", "mean", "minimum", "stdev"]
+    assert ds.statistic("mean").shape == (len(VARIABLES), )
+
+
+def test_is_zarr_needs_a_group(tmp_path):
+    assert not is_zarr(tmp_path)
+    (tmp_path / "zarr.json").write_text(json.dumps({"zarr_format": 3, "node_type": "array"}))
+    assert not is_zarr(tmp_path)
+    (tmp_path / "zarr.json").write_text("not json")
+    assert not is_zarr(tmp_path)
+    with pytest.raises(FileNotFoundError, match="not a zarr dataset"):
+        Dataset(tmp_path)
+
+
+def test_array_rejects_groups(dataset_path_v3):
+    zarr.open_group(str(dataset_path_v3), mode="r+").create_group("sub")
+    with pytest.raises(TypeError, match="`sub` is not an array"):
+        Dataset(dataset_path_v3).array("sub")
 
 
 def test_spec_empty_and_strict(write_spec):
@@ -248,3 +279,9 @@ def test_load_source_rejects_non_source(write_spec, tmp_path):
     (tmp_path / "bad.py").write_text("class S:\n    pass\n")
     with pytest.raises(TypeError):
         load_source(load_spec(write_spec("source: {plugin: bad.py:S}\n")))
+
+
+def test_arrays_ignores_stray_files(dataset_path_v3, recwarn):
+    (dataset_path_v3 / ".snakemake_timestamp").write_text("")
+    assert "data" in Dataset(dataset_path_v3).arrays
+    assert not [w for w in recwarn if "Zarr hierarchy" in str(w.message)]

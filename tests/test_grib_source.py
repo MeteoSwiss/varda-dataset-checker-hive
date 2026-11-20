@@ -65,8 +65,8 @@ class GribArchive:
         self.db = root / "index.db"
         z = zarr.open_group(str(dataset), mode="r+")
         lat, lon = grid_coordinates(z["data"].shape[-1])  # the dataset is on the GRIB grid
-        z.create_dataset("latitudes", data=lat, overwrite=True)
-        z.create_dataset("longitudes", data=lon, overwrite=True)
+        z.create_array("latitudes", data=lat, overwrite=True)
+        z.create_array("longitudes", data=lon, overwrite=True)
         self.data, self.dates = z["data"][:], [str(d) for d in z["dates"][:].astype("datetime64[s]")]
         (root / "data").mkdir()
         with sqlite3.connect(self.db) as con:
@@ -342,7 +342,7 @@ def test_grib_ensemble(tmp_path):
     group = zarr.open_group(str(path), mode="r+")
     data = group["data"][:]
     two = np.concatenate([data, data + 1], axis=2)
-    group.create_dataset("data", data=two, chunks=(1, len(VARIABLES), 2, NG), overwrite=True)
+    group.create_array("data", data=two, chunks=(1, len(VARIABLES), 2, NG), overwrite=True)
     (tmp_path / "grib").mkdir()
     archive = GribArchive(tmp_path / "grib", path)
     archive.add_clean(numbers=("1", "2"))

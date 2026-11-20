@@ -52,7 +52,7 @@ def _set_array(path: Path, name: str, values: np.ndarray) -> None:
     if name in root and root[name].shape == values.shape:
         root[name][:] = values
     else:
-        root.create_dataset(name, data=values, overwrite=True)
+        root.create_array(name, data=values, overwrite=True)
 
 
 def _varmeta(path: Path, variable: str, key: str, value) -> None:

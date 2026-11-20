@@ -51,6 +51,13 @@ def _ref(out):
     return yaml.safe_load((out / "ref.yaml").read_text())
 
 
+def _untimed(dump):
+    """`dump` without its `created` timestamps (to the second), which differ between two runs."""
+    if isinstance(dump, dict):
+        return {k: _untimed(v) for k, v in dump.items() if k != "created"}
+    return dump
+
+
 def test_out_writes_report_and_ref(dataset_path, tmp_path, write_spec, capsys):
     """`--out` writes report.md, report.json and ref.yaml, also when the checks fail."""
     out = tmp_path / "hive"
@@ -67,13 +74,25 @@ def test_out_writes_report_and_ref(dataset_path, tmp_path, write_spec, capsys):
     assert hive_main([str(dataset_path), "--spec", str(spec), "--out", str(failing)]) == 1
     assert json.loads((failing / "report.json").read_text())["summary"]["ERROR"] > 0
     assert "failed" in (failing / "report.md").read_text()
-    assert _ref(failing) == ref  # the dump does not depend on the outcome of the checks
+    assert _untimed(_ref(failing)) == _untimed(ref)  # the dump does not depend on the outcome of the checks
 
     # a single bee writes only its section; spot-bee has none
     assert meta_bee_main(["check", str(dataset_path), "--out", str(tmp_path / "meta")]) == 0
     assert set(_ref(tmp_path / "meta")) == {"format", "meta"}
     assert spot_bee_main(["check", str(dataset_path), "--out", str(tmp_path / "spot")]) == 0
     assert _ref(tmp_path / "spot") == {"format": "varda-hive-ref/1"}
+
+
+def test_hive_on_zarr_format_3(dataset_path, dataset_path_v3, tmp_path):
+    """All bees run on a zarr format 3 dataset, with the same dump as format 2."""
+    assert hive_main([str(dataset_path_v3), "--out", str(tmp_path / "v3")]) == 0
+    assert hive_main([str(dataset_path), "--out", str(tmp_path / "v2")]) == 0
+    v2, v3 = _ref(tmp_path / "v2"), _ref(tmp_path / "v3")
+    assert v3["meta"]["attrs"] == v2["meta"]["attrs"] and v3["meta"]["arrays"] == v2["meta"]["arrays"]
+    run_specific = {"dataset", "provenance"}
+    for section in ("meta", "stats"):
+        assert _untimed({k: v for k, v in v3[section].items() if k not in run_specific}) == \
+            _untimed({k: v for k, v in v2[section].items() if k not in run_specific})
 
 
 def test_out_without_out_writes_nothing(dataset_path, tmp_path, monkeypatch):
@@ -146,9 +165,9 @@ def test_three_workflows(dataset_path, tmp_path, write_spec, capsys):
     capsys.readouterr()
     ref = _ref(out)
     ds = Dataset(dataset_path)
-    assert ref["stats"] == json.loads(json.dumps(compute_stats(ds, load_spec(spec))))
+    assert _untimed(ref["stats"]) == _untimed(json.loads(json.dumps(compute_stats(ds, load_spec(spec)))))
     assert ref["stats"]["sampling"]["dates"] == load_stats(reference)["sampling"]["dates"]
-    assert ref["meta"] == json.loads(json.dumps(fingerprint(ds)))
+    assert _untimed(ref["meta"]) == _untimed(json.loads(json.dumps(fingerprint(ds))))
 
     # an intended change: report.md lists the differences; accepting it is a copy
     zarr.open_group(str(dataset_path), mode="r+")["data"][:, 3] *= 2

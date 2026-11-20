@@ -29,6 +29,17 @@ def test_round_trip(dataset_path, tmp_path, suffix):
     assert load_reference(tmp_path / f"m{suffix}") == loaded
 
 
+def test_same_fingerprint_for_both_zarr_formats(tmp_path):
+    """A dataset rewritten in zarr format 3 compares clean against a reference taken from format 2."""
+    v2 = fingerprint(Dataset(build_dataset(tmp_path / "v2.zarr")))
+    v3 = fingerprint(Dataset(build_dataset(tmp_path / "v3.zarr", zarr_format=3)))
+    assert v2["attrs"] == v3["attrs"] and v2["arrays"] == v3["arrays"]
+    assert v3["arrays"]["dates"]["dtype"] == "datetime64[s]" and v3["arrays"]["data"]["dtype"] == "float32"
+    comparison = compare_meta(v3, v2)
+    assert comparison.counts[DIFFERS] == 0 and comparison.counts[ADDED] == 0 and comparison.counts[MISSING] == 0
+    assert load_reference(tmp_path / "v3.zarr")["arrays"] == v2["arrays"]
+
+
 def test_rejects_other_files(tmp_path):
     (tmp_path / "s.json").write_text('{"format": "varda-hive-stats/5"}')
     with pytest.raises(ValueError, match="not a meta file"):

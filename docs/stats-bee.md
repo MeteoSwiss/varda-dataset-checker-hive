@@ -32,7 +32,8 @@ uv run stats-bee calibrate <dataset.zarr> --spec <spec.yaml> -o tol.yaml  # cali
 ## How stats-bee reads a dataset
 
 stats-bee reads the zarr store directly, not through anemoi-datasets, so the checks see exactly
-what is on disk. It reads the `.zattrs` keys that anemoi writes:
+what is on disk. It reads the group attributes that anemoi writes (`.zattrs` in zarr format 2, `zarr.json` in
+format 3):
 - `variables`
 - `statistics_start_date` / `statistics_end_date`: the window the stored statistics cover
 - `allow_nans`
