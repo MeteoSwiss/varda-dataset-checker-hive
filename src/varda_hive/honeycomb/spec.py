@@ -88,6 +88,8 @@ class PhysicalRange(_Strict):
     min: float = -math.inf
     max: float = math.inf
     units: str = ""
+    # Exact values meaning "not determined", outside [min, max].
+    flag_values: list[float] = Field(default_factory=list)
 
 
 class BBox(_Strict):
@@ -126,6 +128,9 @@ class VariableSpec(BaseModel):
     allow_nans: bool = False
     # The variable never changes in time (the dataset's `constant_fields` lists it).
     constant: bool = False
+    # Exact values meaning "not determined" (e.g. -999.9), outside [min, max]. Matched exactly in
+    # the stored dtype; physical_ranges skips them and reports their share as INFO.
+    flag_values: list[float] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _valid(self) -> "VariableSpec":
@@ -134,6 +139,14 @@ class VariableSpec(BaseModel):
                 raise ValueError(f"`{key}`: expected a scalar value, got {value!r}")
         if self.min is not None and self.max is not None and self.min > self.max:
             raise ValueError(f"min {self.min} > max {self.max}")
+        if self.flag_values:
+            if self.min is None and self.max is None:
+                raise ValueError("flag_values needs min or max")
+            lo = -math.inf if self.min is None else self.min
+            hi = math.inf if self.max is None else self.max
+            for flag in self.flag_values:
+                if lo <= flag <= hi:
+                    raise ValueError(f"flag value {flag:g} inside the physical range [{self.min}, {self.max}]")
         return self
 
     @property
@@ -217,7 +230,8 @@ class Spec(_Strict):  # pylint: disable=too-many-instance-attributes
             name:
             PhysicalRange(min=-math.inf if e.min is None else e.min,
                           max=math.inf if e.max is None else e.max,
-                          units=e.units or "")
+                          units=e.units or "",
+                          flag_values=list(e.flag_values))
             for name, e in self._entries().items() if e.min is not None or e.max is not None
         }
 

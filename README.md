@@ -175,6 +175,7 @@ paths resolve against the spec file's directory.
 | `name` | none | for humans |
 | `variables` | all bees | exact set of variables (meta-bee): a list, or a mapping `{name: {...}}` with the per-variable fields below |
 | `variables.<name>.min`, `.max`, `.units` | stats-bee, meta-bee | physical range (`physical_ranges`); units, compared with variables_metadata |
+| `variables.<name>.flag_values` | stats-bee | list of exact values meaning "not determined" (e.g. `[-999.9]`), matched exactly in the stored dtype (-999.9 matches float32 -999.9000244); skipped by `physical_ranges` and reported as an INFO share; must lie outside `min`/`max` (which are then required) |
 | `variables.<name>.allow_nans` | meta-bee, stats-bee | `true`: NaNs allowed in this variable (default `false`) |
 | `variables.<name>.constant` | stats-bee | `true`: never changes in time (used when the dataset lists no `constant_fields`) |
 | `variables.<name>.<key>` | meta-bee | any other key (`param`, `levtype`, `levelist`, `process`, ...): expected in `variables_metadata.<name>`, at its top or in `mars` |

@@ -15,6 +15,8 @@ anchors:
 # (`variables: [T_2M, U_10M]`) works too, without the per-variable checks. Per variable:
 #   min, max, units  physical range (stats-bee physical_ranges) and units (meta-bee); keep the bounds
 #                    loose: they catch unit errors and garbage, not unusual weather
+#   flag_values      exact values meaning "not determined" (e.g. [-999.9]), outside min/max (needed);
+#                    matched exactly in the stored dtype, skipped by physical_ranges, INFO share
 #   allow_nans       true if the variable may contain NaNs (default false), see `allow_nans` below
 #   constant         true if it never changes in time (the dataset's `constant_fields`)
 #   any other key    expected in the dataset's `variables_metadata.<variable>`, at its top level or
@@ -26,6 +28,7 @@ variables:
   U_10M: {<<: *wind, param: U_10M, levtype: sfc}
   V_10M: {<<: *wind, param: V_10M, levtype: sfc}
   CIN_MU: {min: -2000.0, max: 0.0, units: J kg-1, allow_nans: true, param: CIN_MU, levtype: sfc}
+  CIN_ML: {min: 0.0, max: 10000.0, units: J kg-1, flag_values: [-999.9], param: CIN_ML, levtype: sfc}
   FIS: {constant: true, param: FIS, levtype: sfc, constant_in_time: true}
   cos_latitude: {computed_forcing: true, constant_in_time: true}
 

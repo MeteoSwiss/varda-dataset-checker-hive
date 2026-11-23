@@ -14,12 +14,18 @@ Every sampled date is read whole (one chunk), so per date and variable:
   point is never missed;
 - mean and stdev of the finite values cover `n_points` seeded grid points, the same on every date
   (the costly part).
+A variable may have `flag_values` in the spec (a fill value outside the physical range, matched
+exactly in the stored dtype). minimum, maximum, mean and stdev still include the flags (they are
+compared with the stored statistics); `valid_minimum`/`valid_maximum` (min/max of the finite
+non-flag values) and `n_flag` (number of flags) are the flag-aware per-date summaries, and the
+stats file gets a `flag_share` for flagged variables only.
 These per-date summaries live in memory only (`Sample`): the checks use them, the stats file does not.
 
 A stats file holds, per variable:
 - `stored`: the statistics stored in the dataset (minimum, maximum, mean, stdev)
 - `sample`: over all sampled dates, minimum, maximum, NaN and inf counts of the full domain, and
-  mean and stdev of the finite values on the sampled points
+  mean and stdev of the finite values on the sampled points; for a variable with `flag_values`
+  also `flag_share`, the share of flag values over the sampled dates (full domain)
 
 Its size depends only on the number of variables (and the list of sampled dates in `sampling`),
 not on the size of the dataset. Two stats files of the same sample (same spec sampling and
@@ -31,7 +37,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import math
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 import warnings
 
 import numpy as np
@@ -45,10 +51,17 @@ from ...honeycomb.sampling import sample_points, sampled_dates
 FORMAT = "varda-hive-stats/5"
 # Per-date summary of one variable: mean/stdev (and n_finite, their weight) on the sampled points,
 # minimum/maximum and the NaN/inf counts on the full domain.
-SUMMARY = ("mean", "stdev", "minimum", "maximum", "n_nan", "n_inf", "n_finite")
-COUNTS = ("n_nan", "n_inf", "n_finite")
+SUMMARY = ("mean", "stdev", "minimum", "maximum", "n_nan", "n_inf", "n_finite", "valid_minimum", "valid_maximum",
+           "n_flag")
+COUNTS = ("n_nan", "n_inf", "n_finite", "n_flag")
 SAMPLE_STATS = ("minimum", "maximum", "mean", "stdev", "n_nan", "n_inf")
 N_BOOTSTRAP = 200
+
+
+def flag_mask(values: np.ndarray, flags: Sequence[float]) -> np.ndarray:
+    """True where `values` equal a flag value, exactly in the stored dtype (a spec value -999.9
+    matches the float32 -999.9000244)."""
+    return np.isin(values, np.asarray(flags, dtype=values.dtype))
 
 
 def statistics_window(ds: Dataset) -> tuple[int, int]:
@@ -80,6 +93,7 @@ class Sample:  # pylint: disable=too-many-instance-attributes
     missing: list[str]  # sampled dates (the spec's) that are not in the dataset or missing in it
     stored: dict[str, dict[str, Any]]  # None for NaN
     seed: int
+    flags: dict[str, list[float]] = field(default_factory=dict)  # flag values of the variables that have some
 
     @property
     def full_domain(self) -> bool:
@@ -93,18 +107,21 @@ class Sample:  # pylint: disable=too-many-instance-attributes
             for j, s in enumerate(SUMMARY)
         }
 
-    def aggregate(self) -> dict[str, dict[str, Any]]:
+    def aggregate(self) -> dict[str, dict[str, Any]]:  # pylint: disable=too-many-locals
         """Over all sampled dates: minimum, maximum and NaN/inf counts of the full domain, and mean and
         stdev of the finite values on the sampled points. Exact from the per-date summaries: the mean
         and the pooled variance are weighted by the number of finite sampled values of each date."""
-        m, s, lo, hi, n_nan, n_inf, weight = (self.summary[:, :, j] for j in range(len(SUMMARY)))
+        m, s, lo, hi, n_nan, n_inf, weight, n_flag = (self.summary[:, :, SUMMARY.index(c)]
+                                                      for c in ("mean", "stdev", "minimum", "maximum", "n_nan", "n_inf",
+                                                                "n_finite", "n_flag"))
         total = weight.sum(axis=0)
         with warnings.catch_warnings(), np.errstate(invalid="ignore", divide="ignore"):
             warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN variables give NaN
             mean = np.nansum(weight * m, axis=0) / total
             var = np.nansum(weight * (s**2 + (m - mean)**2), axis=0) / total
             lo, hi = np.nanmin(lo, axis=0), np.nanmax(hi, axis=0)
-        return {
+        n_values = len(self.dates) * self.values_per_date
+        out = {
             name: {
                 "minimum": _num(lo[i]),
                 "maximum": _num(hi[i]),
@@ -115,6 +132,10 @@ class Sample:  # pylint: disable=too-many-instance-attributes
             }
             for i, name in enumerate(self.variables)
         }
+        for i, name in enumerate(self.variables):
+            if name in self.flags:
+                out[name]["flag_share"] = _num(n_flag[:, i].sum() / n_values) if n_values else None
+        return out
 
     def estimate(self) -> dict[str, dict[str, Any]]:
         """The window statistics estimated from the random dates inside it, see `estimate`, with the
@@ -140,16 +161,18 @@ def sample_indices(ds: Dataset, spec: Spec) -> tuple[dict[int, bool], list[str]]
     return {t: r and window[0] <= t < window[1] for t, r in picked.items()}, missing
 
 
-def compute_sample(ds: Dataset, spec: Spec) -> Sample:
+def compute_sample(ds: Dataset, spec: Spec) -> Sample:  # pylint: disable=too-many-locals
     """Read and summarise the spec's sample. One read per sampled date."""
     picked, missing = sample_indices(ds, spec)
     indices = sorted(picked)
     n_grid = ds.data.shape[-1]
     points = sample_points(n_grid, spec.sampling)
     summary = np.full((len(indices), len(ds.variables), len(SUMMARY)), np.nan)
+    flags = {n: list(r.flag_values) for n, r in spec.ranges().items() if r.flag_values}
+    var_flags = [flags.get(n) for n in ds.variables]
     for k, t in enumerate(indices):
         step = ds.step(t)
-        summary[k] = summarise(step, None if len(points) == n_grid else points)
+        summary[k] = summarise(step, None if len(points) == n_grid else points, var_flags)
     window = statistics_window(ds)
     n_members = int(np.prod(ds.data.shape[2:-1]))
     stored = {s: ds.statistic(s) for s in STATISTICS if s in ds.arrays}  # one read per array
@@ -171,16 +194,24 @@ def compute_sample(ds: Dataset, spec: Spec) -> Sample:
             for i, name in enumerate(ds.variables)
         },
         seed=spec.sampling.seed,
+        flags=flags,
     )
 
 
-def summarise(step: np.ndarray, points: np.ndarray | None = None) -> np.ndarray:
+def summarise(step: np.ndarray,
+              points: np.ndarray | None = None,
+              flags: Sequence[Sequence[float] | None] | None = None) -> np.ndarray:
     """(variable, ..., grid) -> (variable, SUMMARY) in float64.
 
     Minimum, maximum and the NaN and inf counts over the full domain; mean and stdev of the finite
     values (and their number, `n_finite`) on the grid `points`, all points if None. An inf must not
     turn the summaries into inf/NaN. No float64 copy of the field: reductions on the stored dtype,
-    with a float64 accumulator for mean and stdev."""
+    with a float64 accumulator for mean and stdev.
+
+    `flags` has one entry per variable (None or empty: no flag values). Flags stay in all the
+    summaries above; `valid_minimum`/`valid_maximum` are the min/max of the finite non-flag values
+    of the full domain (NaN if none) and `n_flag` counts the flags (without flags: the minimum,
+    maximum and 0)."""
     x = step.reshape(step.shape[0], -1)
     sub = x if points is None else step[..., points].reshape(step.shape[0], -1)
     out = np.full((x.shape[0], len(SUMMARY)), np.nan)
@@ -192,6 +223,16 @@ def summarise(step: np.ndarray, points: np.ndarray | None = None) -> np.ndarray:
         values = x[i] if n_finite == x[i].size else x[i][finite]
         if values.size:
             out[i, 2:4] = values.min(), values.max()
+        var_flags = flags[i] if flags is not None else None
+        if var_flags:
+            is_flag = flag_mask(x[i], var_flags)
+            out[i, 9] = np.count_nonzero(is_flag)
+            valid = x[i][finite & ~is_flag]
+            if valid.size:
+                out[i, 7:9] = valid.min(), valid.max()
+        else:
+            out[i, 7:9] = out[i, 2:4]
+            out[i, 9] = 0
         if points is not None:
             finite = np.isfinite(sub[i])
             n_finite = int(np.count_nonzero(finite))
@@ -220,7 +261,7 @@ def estimate(  # pylint: disable=too-many-locals
     skewed variables. Minimum and maximum can only be bounded by a sample.
     """
     n = len(summary)
-    m, s, lo, hi = (summary[:, :, j] for j in range(4))
+    m, s, lo, hi = (summary[:, :, SUMMARY.index(c)] for c in ("mean", "stdev", "minimum", "maximum"))
     w = summary[:, :, SUMMARY.index("n_finite")]
     fpc = math.sqrt(max(0.0, 1 - n / n_window)) if n_window else 0.0
     exact = n == n_window and full_domain
@@ -392,7 +433,8 @@ def _compare_variable(findings: list[Finding], name: str, sections: list[tuple[d
             verdict = _classify(value, ref_value, 0.0 if stat in COUNTS else atol)
             counts[verdict] += 1
             if verdict != IDENTICAL:
-                findings.append(_finding(verdict, f"{section} {stat}", name, value, ref_value))
+                # a changed flag share is a processing change, never an error
+                findings.append(_finding(verdict, f"{section} {stat}", name, value, ref_value, stat == "flag_share"))
     return counts
 
 
@@ -430,8 +472,14 @@ def _classify(value: float | None, reference: float | None, atol: float) -> str:
     return CLOSE if abs(value - reference) <= atol else DIFFERS
 
 
-def _finding(verdict: str, what: str, variable: str, value: float | None, reference: float | None) -> Finding:
-    make = error if verdict == DIFFERS else warning
+def _finding(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+        verdict: str,
+        what: str,
+        variable: str,
+        value: float | None,
+        reference: float | None,
+        warn_only: bool = False) -> Finding:
+    make = error if verdict == DIFFERS and not warn_only else warning
     diff = abs(value - reference) if value is not None and reference is not None else None
     return make(f"{what} {verdict}: {value} vs {reference}",
                 variable=variable,

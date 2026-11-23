@@ -13,7 +13,7 @@ from typing import Any, Generator, Iterator
 
 import numpy as np
 
-from ...honeycomb import CheckContext, Finding, bee_dump, check, dumps, error, info, skipped, warning
+from ...honeycomb import CheckContext, Finding, PhysicalRange, bee_dump, check, dumps, error, info, skipped, warning
 from ...honeycomb.dataset import is_zarr
 from ...honeycomb.files import provides
 from .calibrate import load_tolerances, mismatch
@@ -184,6 +184,11 @@ def physical_ranges(ctx: CheckContext) -> Iterator[Finding]:
     """Sampled values and stored min/max lie inside the `min`/`max` of the spec's `variables`.
 
     Skipped when no variable has a `min` or `max`; variables without one are listed as INFO.
+    A variable with `flag_values` (exact values meaning "not determined", matched in the stored
+    dtype) is tested on its non-flag values: per date `valid_minimum`/`valid_maximum` (a date with
+    only flags is not an error), and one INFO gives the flag share of the sampled dates. The stored
+    maximum is checked as usual; the stored minimum only if it is not a flag, since anemoi counted
+    the flags in its statistics and they cannot be filtered out.
     """
     ranges = ctx.spec.ranges()
     if not ranges:
@@ -196,23 +201,55 @@ def physical_ranges(ctx: CheckContext) -> Iterator[Finding]:
     for name, bounds in ranges.items():
         if name not in sample.variables:
             continue
-        lo, hi, units = bounds.min, bounds.max, bounds.units
+        lo, hi, flags = bounds.min, bounds.max, list(bounds.flag_values)
         per_date = sample.per_date(name)
-        for date, vmin, vmax in zip(sample.dates, per_date["minimum"], per_date["maximum"]):
-            if vmin is not None and (vmin < lo or vmax > hi):
-                yield error(f"values [{vmin:.6g}, {vmax:.6g}] outside physical range [{lo}, {hi}] {units}",
-                            variable=name,
-                            time=date,
-                            details={
-                                "minimum": vmin,
-                                "maximum": vmax
-                            })
-        stored = sample.stored[name]
-        if stored.get("minimum") is not None and (stored["minimum"] < lo or stored["maximum"] > hi):
-            yield error(
-                f"stored minimum/maximum [{stored['minimum']:.6g}, {stored['maximum']:.6g}] "
-                f"outside physical range [{lo}, {hi}] {units}",
-                variable=name)
+        keys = ("valid_minimum", "valid_maximum") if flags else ("minimum", "maximum")
+        for date, vmin, vmax in zip(sample.dates, per_date[keys[0]], per_date[keys[1]]):
+            if vmin is not None and vmax is not None and (vmin < lo or vmax > hi):
+                yield error(
+                    f"{'non-flag values' if flags else 'values'} [{vmin:.6g}, {vmax:.6g}] "
+                    f"outside physical range [{lo}, {hi}] {bounds.units}",
+                    variable=name,
+                    time=date,
+                    details={
+                        "minimum": vmin,
+                        "maximum": vmax
+                    })
+        if flags:
+            yield _flag_share(sample, name, flags)
+        finding = _stored_range(name, sample.stored[name], bounds, flags)
+        if finding:
+            yield finding
+
+
+def _flag_share(sample: Sample, name: str, flags: list[float]) -> Finding:
+    """INFO with the share of flag values over the sampled dates (full domain)."""
+    n_flag = sum(sample.per_date(name)["n_flag"])
+    share = n_flag / (len(sample.dates) * sample.values_per_date) if sample.dates else 0.0
+    return info(
+        f"{name}: {share:.1%} flag values ({', '.join(f'{f:g}' for f in flags)}) "
+        f"on {len(sample.dates)} sampled dates",
+        variable=name,
+        details={
+            "flag_share": share,
+            "n_flag": n_flag,
+            "flag_values": flags
+        })
+
+
+def _stored_range(name: str, stored: dict[str, Any], bounds: PhysicalRange, flags: list[float]) -> Finding | None:
+    """ERROR if the stored minimum (unless it is a flag) or maximum is outside the range. Each is
+    checked only if finite (None)."""
+    lo, hi = bounds.min, bounds.max
+    smin, smax = stored.get("minimum"), stored.get("maximum")
+    checked_min = smin
+    if smin is not None and flags and bool(np.isin(np.float32(smin), np.asarray(flags, dtype=np.float32))):
+        checked_min = None
+    if (checked_min is not None and checked_min < lo) or (smax is not None and smax > hi):
+        shown = ", ".join("n/a" if x is None else f"{x:.6g}" for x in (smin, smax))
+        return error(f"stored minimum/maximum [{shown}] outside physical range [{lo}, {hi}] {bounds.units}",
+                     variable=name)
+    return None
 
 
 @check("stats")

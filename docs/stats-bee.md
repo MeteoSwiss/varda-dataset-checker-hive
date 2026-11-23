@@ -14,7 +14,7 @@ source is spot-bee's job.
 | check | what | severity |
 |---|---|---|
 | `statistics_consistent` | stored mean/stdev/min/max are self-consistent (no NaN, min <= mean <= max, stdev 0 exactly when min == max) and match the ones recomputed from the sample | ERROR / WARNING, see [tolerances](#how-the-tolerances-work) |
-| `physical_ranges` | per-date and stored min/max inside the `min`/`max` of the spec's `variables` | ERROR |
+| `physical_ranges` | per-date and stored min/max inside the `min`/`max` of the spec's `variables`; for variables with `flag_values`, the per-date min/max of the non-flag values, and an INFO with the flag share, see [flag values](#flag-values) | ERROR / INFO |
 | `finite_values` | no inf on the sampled dates and points, and NaN only in the variables allowed to have them, see [NaNs](#nans) | ERROR |
 | `statistics_window_valid` | `statistics_start_date` <= `statistics_end_date`, both within the dataset's dates | ERROR / WARNING if missing |
 | `constant_fields` | fields in `constant_fields` (the dataset's, else the spec's variables with `constant: true`) don't change between dates (ERROR); other fields aren't identical on all dates, or uniform in space on one date (WARNING, computed forcings exempt) | ERROR / WARNING |
@@ -73,6 +73,47 @@ date on 1 km grids (about 120 variables x 1.15M points, 0.55 GB): read 0.4–0.5
 min/max/NaN/inf 0.07 s, mean/stdev on 100k points 0.15–0.3 s, or on the full domain 0.4–1 s.
 `n_points` in the 10k–100k range is a good default.
 
+### Flag values
+
+Some fields hold a flag value where the quantity is not determined. In ICON, CIN_ML and CIN_MU are
+-999.9 J kg-1 on many dates, and their real values lie between 0 and about 6200. A variable's
+`flag_values` in the spec lists these exact values:
+
+```yaml
+variables:
+  CIN_ML: {min: 0.0, max: 10000.0, flag_values: [-999.9]}
+```
+
+The flags must lie outside `[min, max]`, and `flag_values` needs `min` or `max`. A flag is
+matched exactly in the stored dtype: the flag is cast to the array's dtype, so -999.9 matches a
+float32 value of -999.9000244, and a value that differs in float32 rounding does not match.
+
+For a variable with flags, `physical_ranges` does the following:
+- **per date**, the min and max of the non-flag values over the full domain are tested against
+  `[min, max]`. A date whose values are all flags has no such range and is not an error; it only
+  counts in the share below.
+- **one INFO per variable** gives the share of flag values over the sampled dates and points, e.g.
+  "CIN_ML: 61.8% flag values (-999.9) on 54 sampled dates".
+- **stored maximum** is checked as for any variable. **Stored minimum** is checked only when it is
+  not a flag, because anemoi counts the flags in its statistics, so a stored minimum of -999.9 is
+  expected.
+
+Without `flag_values`, `physical_ranges` is unchanged. The `min` and `max` of the spec must still
+cover the real values, so `min: -1000` is no longer needed to pass the flags.
+
+`statistics_consistent`, `matches_reference_stats`, `constant_fields`, `finite_values` and spot-bee
+are unchanged on purpose. anemoi includes the flags in its stored statistics, so comparing them with
+the sample (which also includes the flags) compares like with like.
+
+The sample keeps the minimum, maximum, mean and stdev over all values, flags included. The
+non-flag minimum/maximum and the flag count per date live only in memory, for `physical_ranges`.
+The stats file (the `stats` section of `ref.yaml`) adds a single key, `flag_share` in `sample`
+(the flag count over the sampled dates, divided by the number of dates times the values per date),
+and only for flagged variables: stats files of specs without `flag_values` are unchanged.
+The format is unchanged (`varda-hive-stats/5`). A change in `flag_share` is a WARNING in the
+reference comparison: it shows a processing change, such as a flag appearing on more dates.
+References without `flag_share` are not compared on it.
+
 ## Stats files
 
 stats-bee's dump, the `stats` section of `ref.yaml` (written by `--out`), is a stats file: a small fingerprint of a dataset's values on its seeded sample. Its size depends
@@ -85,7 +126,7 @@ of the sample. It is built once per run, from the sample all checks share:
 | `dataset`, `created`, `generator` | where it comes from |
 | `sampling` | seed, `n_dates`, `n_points`, `include_dates`, grid size, statistics window, and the sampled `dates` (with `random`: the ones inside the window that estimate the statistics) |
 | `stored` | the dataset's stored minimum/maximum/mean/stdev per variable |
-| `sample` | per variable over all sampled dates: minimum, maximum, NaN and inf counts of the full domain; mean and stdev of the finite values on the sampled points |
+| `sample` | per variable over all sampled dates: minimum, maximum, NaN and inf counts of the full domain; mean and stdev of the finite values on the sampled points; `flag_share` for variables with `flag_values` (see [Flag values](#flag-values)) |
 
 Floats are written with `repr`, which round-trips exactly, and NaN and inf are written as `null`.
 The current format is `varda-hive-stats/5`. Files of older formats are rejected: regenerate them
