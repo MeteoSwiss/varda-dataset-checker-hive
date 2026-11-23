@@ -39,14 +39,14 @@ The spec, the ref file and the CI job all live in the dataset repo, next to the 
 All three steps are the same command; only what you do with `hive/` differs.
 
 1. **Set up the spec** once, from the recipe: see [Setting up a dataset](../README.md#setting-up-a-dataset).
-   Set `reference: <dataset>.ref.yaml` before the file exists.
+   Set `reference: refs/<dataset>.ref.yaml` before the file exists.
 2. **First reference.** Build the first version and run `hive data.zarr --spec checks/<dataset>.yaml
    --strict --out hive/`. The reference checks report "skipped: reference … not found" (exit 1 under
    `--strict`, not a configuration error). Review every other finding; fix the dataset or the spec.
    Accept it by committing the dump with the spec:
 
    ```bash
-   cp hive/ref.yaml checks/<dataset>.ref.yaml
+   cp hive/ref.yaml checks/refs/<dataset>.ref.yaml
    ```
 
    The ref file holds meta-bee's dump (`meta`) and stats-bee's dump (`stats`).
@@ -58,13 +58,23 @@ All three steps are the same command; only what you do with `hive/` differs.
    so accepting a change is a download) and commit it together with the spec change:
 
    ```bash
-   cp hive/ref.yaml checks/<dataset>.ref.yaml
+   cp hive/ref.yaml checks/refs/<dataset>.ref.yaml
    ```
 
    The sample is defined by the spec, so later runs keep comparing the same dates; a change of the
-   sampling or the period in the spec is such an intended change. `hive compare hive/ref.yaml checks/<dataset>.ref.yaml` shows the differences of two dumps
+   sampling or the period in the spec is such an intended change. `hive compare hive/ref.yaml checks/refs/<dataset>.ref.yaml` shows the differences of two dumps
    again, without the data. Accepted metadata churn can also be ignored for good with
    `reference_policy` in the spec, see [meta-bee](meta-bee.md#the-reference-the-meta-section-and-compare).
+
+Keep the ref files in refs/ next to the spec (`checks/refs/<dataset>.ref.yaml`, with
+`reference: refs/<dataset>.ref.yaml` in the spec; relative paths resolve against the spec's
+directory). That separates the hand-written specs from the generated dumps (about 200 kB each). To
+collapse reference updates in GitHub diffs, mark them as generated in the dataset repo's
+`.gitattributes`:
+
+```
+checks/**/refs/*.ref.yaml linguist-generated=true
+```
 
 ## Installing the hive in a job
 

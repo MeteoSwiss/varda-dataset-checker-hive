@@ -45,10 +45,11 @@ bbox: {lat_min: 45.43, lat_max: 48.19, lon_min: 5.25, lon_max: 11.03, tolerance:
 missing_dates: []                            # dates the dataset may list as missing
 
 # Reference of the accepted version, for meta-bee (metadata and structure) and stats-bee
-# (statistics): the `ref.yaml` that `hive data.zarr --spec <this file> --out hive/` writes, copied
-# next to this spec and committed. While it does not exist, the reference checks are skipped (the
-# first reference). A zarr (meta-bee only) works too.
-reference: data.ref.yaml
+# (statistics): the `ref.yaml` that `hive data.zarr --spec <this file> --out hive/` writes,
+# committed in refs/ next to the spec (a relative path resolves against the spec's directory). While
+# it does not exist, the reference checks are skipped (the first reference). A zarr (meta-bee only)
+# works too.
+reference: refs/data.ref.yaml
 # meta-bee: change the severity of differences to the reference (globs on the dotted path, see
 # `hive compare --all`). Defaults: structure ERROR, other metadata WARNING, churn ignored.
 reference_policy:
@@ -58,8 +59,8 @@ reference_policy:
   info: []
 
 # stats-bee: calibrated tolerances for statistics_consistent. Uncomment once written with
-# `stats-bee calibrate data.zarr --spec <this file> -o <dataset>.tolerances.yaml`; recalibrate when `sampling` changes.
-# calibrated_tolerances: <dataset>.tolerances.yaml
+# `stats-bee calibrate data.zarr --spec <this file> -o refs/<dataset>.tolerances.yaml`; recalibrate when `sampling` changes.
+# calibrated_tolerances: refs/<dataset>.tolerances.yaml
 
 # Seeded sampling used by stats-bee and spot-bee
 sampling:

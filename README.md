@@ -31,7 +31,7 @@ uv run hive <dataset.zarr> --spec <spec.yaml>          # all bees
 uv run hive <dataset.zarr> --spec <spec.yaml> --strict --out hive/   # + report.md, report.json, ref.yaml
 uv run meta-bee check <dataset.zarr> --spec <spec.yaml>   # one bee
 uv run hive --list                                     # available checks
-uv run hive compare hive/ref.yaml checks/data.ref.yaml # two dumps: what is identical, what differs
+uv run hive compare hive/ref.yaml checks/refs/data.ref.yaml # two dumps: what is identical, what differs
 uv run stats-bee calibrate <dataset.zarr> --spec <spec.yaml> -o tolerances.yaml   # calibrated tolerances
 uv run spot-bee check <dataset.zarr> --spec <spec.yaml>   # sampled values vs the source
 uv run hive <dataset.zarr> --spec <spec.yaml> --format json --fail-on warning   # or --format markdown
@@ -108,7 +108,7 @@ command:
 |---|---|---|
 | reference exists (CI, release) | `hive data.zarr --spec S --strict --out hive/` | spec and reference checks; exit 0 or 1 |
 | first reference | the same | the reference checks report "skipped: reference … not found" (exit 1 under `--strict`); review, commit `hive/ref.yaml` as the spec's `reference` |
-| intended change | the same | `hive/report.md` lists the differences to the reference; after review, `cp hive/ref.yaml checks/<dataset>.ref.yaml` |
+| intended change | the same | `hive/report.md` lists the differences to the reference; after review, `cp hive/ref.yaml checks/refs/<dataset>.ref.yaml` |
 
 1. **Copy the template** into the dataset repo:
 
@@ -147,13 +147,13 @@ command:
    and accepted it, e.g. `statistics_consistent` on insolation, whose diurnal cycle a small
    sample can't resolve.
 
-6. **Accept the first reference.** Set `reference: <dataset>.ref.yaml` in the spec before the file
+6. **Accept the first reference.** Set `reference: refs/<dataset>.ref.yaml` in the spec before the file
    exists; the reference checks then skip ("reference … not found"), they are not a configuration
    error. Once this version of the dataset is accepted:
 
    ```bash
    uv run hive data.zarr --spec checks/<dataset>.yaml --strict --out hive/
-   cp hive/ref.yaml checks/<dataset>.ref.yaml
+   cp hive/ref.yaml checks/refs/<dataset>.ref.yaml
    ```
 
    Commit the spec and the ref file. Accepting an intended change later is the same copy, after
@@ -184,9 +184,9 @@ paths resolve against the spec file's directory.
 | `grid_points`, `resolution`, `bbox` | meta-bee | expected grid size, `resolution` attribute, extent `{lat_min, lat_max, lon_min, lon_max, tolerance}` |
 | `allow_nans` | meta-bee, stats-bee | `true`, `false` or a list of variables; with a `variables` mapping, set it per variable instead |
 | `missing_dates` | meta-bee | expected `missing_dates` |
-| `reference` | meta-bee, stats-bee | ref file (`ref.yaml` of `--out`) of the accepted version, or a zarr (meta-bee only); if it does not exist yet, the reference checks are skipped (the first reference) |
+| `reference` | meta-bee, stats-bee | ref file (`ref.yaml` of `--out`) of the accepted version, or a zarr (meta-bee only); if it does not exist yet, the reference checks are skipped (the first reference). A relative path resolves against the spec's directory; recommended: `refs/<dataset>.ref.yaml`, which keeps the generated dumps apart from the hand-written specs |
 | `reference_policy` | meta-bee | `{ignore, error, warning, info: [path globs]}`: severity of differences to the reference |
-| `calibrated_tolerances` | stats-bee | tolerance file for `statistics_consistent`, written by `stats-bee calibrate` |
+| `calibrated_tolerances` | stats-bee | tolerance file for `statistics_consistent`, written by `stats-bee calibrate`; a relative path resolves against the spec's directory (e.g. `refs/<dataset>.tolerances.yaml`) |
 | `sampling` | stats-bee, spot-bee | `seed`, `n_dates` and `n_points` (int or `all`), `include_dates` (dates); drawn on the spec's period (the dataset's dates without one); the same dates x points for both bees |
 | `tolerances` | stats-bee, spot-bee | `statistics_rtol`, `z_threshold`, `compare_atol_stdev` (stats-bee); `source_rtol`, `source_atol`, `source_per_variable: {VAR: {rtol, atol}}` (spot-bee) |
 | `source` | spot-bee | source plug-in and its args, see [docs/spot-bee.md](docs/spot-bee.md#source-plug-ins) |

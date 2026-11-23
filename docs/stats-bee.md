@@ -23,7 +23,7 @@ source is spot-bee's job.
 ```bash
 uv run stats-bee check <dataset.zarr> --spec <spec.yaml>            # run the checks
 uv run stats-bee check <dataset.zarr> --spec <spec.yaml> --out hive/   # + reports and ref.yaml (stats section)
-uv run hive compare hive/ref.yaml checks/data.ref.yaml               # compare two dumps
+uv run hive compare hive/ref.yaml checks/refs/data.ref.yaml          # compare two dumps
 uv run stats-bee calibrate <dataset.zarr> --spec <spec.yaml> -o tol.yaml  # calibrated tolerances
 ```
 
@@ -141,11 +141,11 @@ dump by `--out` (see [ci.md](ci.md)). With stats-bee alone:
 fresh dataset ──► stats-bee check data.zarr --spec S --out hive/   "is this dataset internally OK?"
                      │ OK (matches_reference_stats skipped: no reference yet)
                      ▼
-                  cp hive/ref.yaml checks/data.ref.yaml   ──► commit in the dataset repo
+                  cp hive/ref.yaml checks/refs/data.ref.yaml   ──► commit in the dataset repo
 
 later: dataset regenerated (new anemoi version, recipe change, rebuild)
                   stats-bee check new.zarr --spec S --out hive/   "what changed?" (hive/report.md)
-                  intended? cp hive/ref.yaml checks/data.ref.yaml
+                  intended? cp hive/ref.yaml checks/refs/data.ref.yaml
 ```
 
 Some faults are invisible from inside the dataset. For example, +2 K on T_850 with the stored
@@ -155,11 +155,11 @@ accepted version shows them.
 ```bash
 # once, after the dataset is built and checked: commit the result
 uv run hive <dataset.zarr> --spec checks/<dataset>.yaml --strict --out hive/
-cp hive/ref.yaml checks/<dataset>.ref.yaml       # and `reference: <dataset>.ref.yaml` in the spec
+cp hive/ref.yaml checks/refs/<dataset>.ref.yaml  # and `reference: refs/<dataset>.ref.yaml` in the spec
 
 # in CI, or after rebuilding the dataset: the same command, exit 1 if anything differs
 uv run hive <dataset.zarr> --spec checks/<dataset>.yaml --strict --out hive/
-uv run hive compare hive/ref.yaml checks/<dataset>.ref.yaml   # the differences again, without the data
+uv run hive compare hive/ref.yaml checks/refs/<dataset>.ref.yaml   # the differences again, without the data
 ```
 
 The sample depends on the spec only (see varda_hive/honeycomb/sampling.py), so a rebuild that meets
@@ -218,8 +218,8 @@ Instead of the distribution-free bound, the tolerance can be measured:
 
 ```bash
 uv run stats-bee calibrate data.zarr --spec checks/<dataset>.yaml --n-calib 300 \
-    -o checks/<dataset>.tolerances.yaml
-# then, in the spec:  calibrated_tolerances: <dataset>.tolerances.yaml
+    -o checks/refs/<dataset>.tolerances.yaml
+# then, in the spec:  calibrated_tolerances: refs/<dataset>.tolerances.yaml
 ```
 
 1. Read `--n-calib` stratified dates inside the statistics window. For each, keep the mean and

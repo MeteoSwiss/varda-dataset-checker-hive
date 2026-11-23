@@ -140,8 +140,9 @@ def test_out_safeguards(dataset_path, tmp_path, write_spec, capsys):
 
 def test_three_workflows(dataset_path, tmp_path, write_spec, capsys):
     """One command for the first reference, a check against it and accepting an intended change."""
-    spec = write_spec("reference: data.ref.yaml\nsampling: {n_dates: 3, seed: 1}\n")
-    reference, out = tmp_path / "data.ref.yaml", tmp_path / "hive"
+    spec = write_spec("reference: refs/data.ref.yaml\nsampling: {n_dates: 3, seed: 1}\n")
+    reference, out = tmp_path / "refs" / "data.ref.yaml", tmp_path / "hive"
+    reference.parent.mkdir()
     # --select: only the reference checks decide the exit code; ref.yaml is the whole dump regardless
     command = [
         str(dataset_path), "--spec",

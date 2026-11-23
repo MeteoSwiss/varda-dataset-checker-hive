@@ -8,8 +8,8 @@ not need anemoi-datasets.
 ```bash
 uv run meta-bee check data.zarr --spec checks/data.yaml           # all meta checks
 uv run meta-bee check data.zarr --spec checks/data.yaml --out hive/   # + reports and ref.yaml (meta section)
-uv run hive compare hive/ref.yaml checks/data.ref.yaml             # what is identical, what differs
-uv run hive compare hive/ref.yaml checks/data.ref.yaml --all       # every item, identical ones too
+uv run hive compare hive/ref.yaml checks/refs/data.ref.yaml        # what is identical, what differs
+uv run hive compare hive/ref.yaml checks/refs/data.ref.yaml --all  # every item, identical ones too
 ```
 
 ## Checks
@@ -48,7 +48,7 @@ grid_points: 30676
 resolution: 2km
 bbox: {lat_min: 45.43, lat_max: 48.19, lon_min: 5.25, lon_max: 11.03, tolerance: 0.01}
 missing_dates: []
-reference: data.ref.yaml                # a ref file (`ref.yaml` of `--out`) or a zarr; skipped while missing
+reference: refs/data.ref.yaml           # a ref file (`ref.yaml` of `--out`) or a zarr; skipped while missing
 reference_policy: {ignore: [], error: [], warning: [], info: []}
 ```
 
@@ -69,8 +69,8 @@ and a list against `true` is an ERROR.
 meta-bee's dump, the `meta` section of `ref.yaml` (written by `--out`, about 30 kB), holds all group
 attributes and, for every array, its shape, dtype, a sha256 of its values and a short summary. `data`
 gets only its shape and dtype. It is built once per run: `matches_reference` compares it with the
-reference's `meta` section, and `--out` writes it. Commit `ref.yaml` next to the spec once a version
-is accepted (with stats-bee's dump in its `stats` section); a rebuild is then compared with it
+reference's `meta` section, and `--out` writes it. Commit `ref.yaml` in refs/ next to the spec once a
+version is accepted (with stats-bee's dump in its `stats` section); a rebuild is then compared with it
 without needing access to the published dataset. The dump does
 not depend on the zarr format (2 or 3) and does not record it: the same content gives the same
 `meta` section, so a dataset rewritten in format 3 compares clean against a reference taken from
@@ -109,5 +109,5 @@ available, as for every bee.
 With `reference` in the spec, `hive --strict` (or `meta-bee check`) runs the reference comparison
 as the `matches_reference` check, so a release needs no separate `compare` step. When a change is
 intended (a new variable, a new period), review the differences in `hive/report.md` of
-`hive ... --out hive/`, then `cp hive/ref.yaml checks/data.ref.yaml` and commit it with the spec change. See [ci.md](ci.md) for the whole
+`hive ... --out hive/`, then `cp hive/ref.yaml checks/refs/data.ref.yaml` and commit it with the spec change. See [ci.md](ci.md) for the whole
 workflow and an example CSCS-CI job.

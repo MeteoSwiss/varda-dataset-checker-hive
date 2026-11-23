@@ -143,7 +143,7 @@ def hive_main(argv: list[str] | None = None) -> int:
   hive data.zarr --spec checks/data.yaml --strict --out hive/
       reference exists: spec and reference checks; hive/ref.yaml is the dataset's dump
       first reference:  the reference checks are skipped; commit hive/ref.yaml as the spec's `reference`
-      intended change:  review hive/report.md, then cp hive/ref.yaml checks/data.ref.yaml
+      intended change:  review hive/report.md, then cp hive/ref.yaml checks/refs/data.ref.yaml
   hive compare a.ref.yaml b.ref.yaml        compare two dumps without the data""")
     _add_check_args(p, with_bees=True)
     args = p.parse_args(argv)
@@ -156,8 +156,8 @@ def _hive_compare_main(argv: list[str]) -> int:
                        description="Compare two ref files (`ref.yaml` of `--out`), section by section, with the "
                        "same comparison as the reference checks, and show what differs.",
                        epilog="""examples:
-  hive compare hive/ref.yaml checks/data.ref.yaml
-  hive compare hive/ref.yaml checks/data.ref.yaml --spec checks/data.yaml --format markdown --all
+  hive compare hive/ref.yaml checks/refs/data.ref.yaml
+  hive compare hive/ref.yaml checks/refs/data.ref.yaml --spec checks/data.yaml --format markdown --all
 
 meta: differences are ERROR (structure: variables, shapes, dates, grid), WARNING (other metadata) or
 INFO, churn (uuid, timestamps, provenance, recipe) is ignored; the spec's `reference_policy` overrides

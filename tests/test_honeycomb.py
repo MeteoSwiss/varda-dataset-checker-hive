@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import json
+from pathlib import Path
 
 import numpy as np
 
@@ -88,6 +89,20 @@ def test_spec_resolves_relative_paths(write_spec, tmp_path):
     spec = load_spec(write_spec("reference: ref.yaml\nsampling: {n_dates: 2}\n"))
     assert spec.reference == tmp_path / "ref.yaml"
     assert spec.sampling.n_dates == 2
+
+
+def test_spec_resolves_refs_subfolder(tmp_path, monkeypatch):
+    # the documented layout: checks/<dataset>.yaml with its dumps in checks/refs/, paths relative to
+    # the spec's directory, not to the working directory
+    refs = tmp_path / "checks" / "refs"
+    refs.mkdir(parents=True)
+    (refs / "x.tolerances.yaml").write_text("{}")
+    spec_path = tmp_path / "checks" / "x.yaml"
+    spec_path.write_text("reference: refs/x.ref.yaml\ncalibrated_tolerances: refs/x.tolerances.yaml\n")
+    monkeypatch.chdir(tmp_path)
+    spec = load_spec(Path("checks/x.yaml"))
+    assert spec.reference == refs.resolve() / "x.ref.yaml"
+    assert spec.calibrated_tolerances == refs.resolve() / "x.tolerances.yaml"
 
 
 def test_spec_checks_files(write_spec, tmp_path):
