@@ -55,9 +55,8 @@ packages = ["src/varda_hive"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-m 'not faulty and not fdb'"
+addopts = "-m 'not fdb'"
 markers = [
-    "faulty: runs on the Varda-tiny faulty datasets on /scratch (skipped when missing)",
     "fdb: runs spot-bee against a real FDB (needs pyfdb, the FDB library and HIVE_FDB_DATASET)",
 ]
 

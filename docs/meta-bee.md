@@ -32,7 +32,7 @@ uv run hive compare hive/ref.yaml checks/refs/data.ref.yaml --all  # every item,
 
 The first group replaces `anemoi-datasets validate`, which catches 3 of the 13 metadata faults of
 Varda-tiny. meta-bee reports all of them: 12 as ERROR, and `m-stats-dates` as a WARNING against the
-reference (its ERROR is stats-bee's `statistics_window_valid`). See `tests/test_faulty_tiny.py`.
+reference (its ERROR is stats-bee's `statistics_window_valid`). See `tests/test_detection.py`.
 
 ## Spec fields
 

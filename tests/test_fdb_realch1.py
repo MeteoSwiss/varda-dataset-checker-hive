@@ -10,7 +10,7 @@ Opt-in: `uv run pytest -m fdb`, inside the FDB uenv with the dataset's eccodes d
     uenv run --view fdb:rea-l-ch1 fdb/5.21:v2 -- bash -c '
       export FDB5_CONFIG_FILE=/store_new/mch/msopr/rea-l-ch1/fdb/config_spinup.yaml
       export ECCODES_DEFINITION_PATH=<eccodes-cosmo-resources definitions>
-      export HIVE_FDB_DATASET=$SCRATCH/hive-dev/varda-realch1-fdb-1km-2014-2025-10m-sfc-v1.zarr
+      export HIVE_FDB_DATASET=<path to>/varda-realch1-fdb-1km-2014-2025-10m-sfc-v1.zarr
       uv run pytest -m fdb'
 
 FDB5_CONFIG_FILE selects the FDB root the dataset was built from (here spinup). Skipped without

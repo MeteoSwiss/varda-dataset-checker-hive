@@ -121,7 +121,7 @@ It runs one query per date and index, so a sample of ~100 variables per date sta
 source:
   plugin: varda_hive.sources.grib_index:GribIndexSource
   args:
-    root: /scratch/mch/huppd/varda/ich1-analysis-anemoi-dataset   # base of the DB and GRIB paths; relative to the spec, default: the spec's directory
+    root: /path/to/ich1-analysis-anemoi-dataset   # base of the DB and GRIB paths; relative to the spec, default: the spec's directory
     indexes:                                   # name -> DB, or a list of DBs (e.g. per-day indexes)
       ana: ml_test/processed/grib-index-ana.db
       fg: ml_test/processed/grib-index-fg.db
@@ -299,8 +299,7 @@ Options for later:
 
 ## Example: Varda-tiny (ICH1 test dataset)
 
-With the spec above (and `source_per_variable: {TOT_PREC_1H: {atol: 1.0e-6}}`, as in
-`tests/test_spot_ich1.py`), `n_dates: 20`, `n_points: 10000` and `include_dates` the dates at time indices 99 and 100:
+With the spec above (and `source_per_variable: {TOT_PREC_1H: {atol: 1.0e-6}}`), `n_dates: 20`, `n_points: 10000` and `include_dates` the dates at time indices 99 and 100:
 
 ```text
 info    spot.matches_source: not comparable with source: 6 h accumulation of TOT_PREC [TOT_PREC_6H]
@@ -322,5 +321,6 @@ It does not find:
 - metadata-only faults: meta-bee
 - statistics-only faults: stats-bee
 
-`tests/test_spot_ich1.py` runs these with `uv run pytest -m faulty`. `HIVE_ICH1_ROOT`,
-`HIVE_FAULTY_DIR` and `HIVE_CLEAN_DS` point it at other copies.
+`tests/test_detection.py` runs these scenarios in the default test suite, on a subset of Varda-tiny
+(9 variables, 48 dates, 503 points) and its analysis and first-guess GRIB messages cut to the same
+points, in `tests/data/`.

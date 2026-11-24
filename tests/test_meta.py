@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """meta-bee checks on synthetic faults: each fault is a small change of `.zattrs` or of an array of
 the clean test dataset, and must be reported by the expected check. The same faults as the Varda-tiny
-`m-*`/`a-*` scenarios, without needing /scratch."""
+`m-*`/`a-*` scenarios; tests/test_detection.py runs those on a subset of the real dataset."""
 import json
 from pathlib import Path
 
@@ -14,6 +14,7 @@ import pytest
 import zarr
 
 from conftest import NG, NT, VARIABLES, build_dataset
+from faults import set_array, set_attrs
 from varda_hive.honeycomb import CheckContext, Dataset, Severity, Spec, load_spec, run
 from varda_hive.honeycomb.dataset import format_frequency, parse_frequency
 from varda_hive.bees.meta.metafile import fingerprint, save_meta
@@ -37,28 +38,10 @@ reference: reference.meta.yaml
 """
 
 
-def _attrs(path: Path, **changes) -> None:
-    attrs = json.loads((path / ".zattrs").read_text())
-    for key, value in changes.items():
-        if value is None:
-            attrs.pop(key)
-        else:
-            attrs[key] = value
-    (path / ".zattrs").write_text(json.dumps(attrs))
-
-
-def _set_array(path: Path, name: str, values: np.ndarray) -> None:
-    root = zarr.open_group(str(path), mode="r+")
-    if name in root and root[name].shape == values.shape:
-        root[name][:] = values
-    else:
-        root.create_array(name, data=values, overwrite=True)
-
-
 def _varmeta(path: Path, variable: str, key: str, value) -> None:
     metadata = json.loads((path / ".zattrs").read_text())["variables_metadata"]
     metadata[variable]["mars"][key] = value
-    _attrs(path, variables_metadata=metadata)
+    set_attrs(path, variables_metadata=metadata)
 
 
 def _dates(path: Path) -> np.ndarray:
@@ -74,37 +57,37 @@ def _with(values: np.ndarray, index: int, value) -> np.ndarray:
 def _drop_last_date(p: Path) -> None:
     """One date fewer than time steps in `data`, with consistent date attributes."""
     d = _dates(p)[:-1].copy()
-    _set_array(p, "dates", d)
-    _attrs(p, end_date=str(d[-1]))
+    set_array(p, "dates", d)
+    set_attrs(p, end_date=str(d[-1]))
 
 
 def _swap_dates(p: Path) -> None:
     d = _dates(p)
     d[[3, 4]] = d[[4, 3]]
-    _set_array(p, "dates", d)
+    set_array(p, "dates", d)
 
 
 def _duplicate_date(p: Path) -> None:
     d = _dates(p)
     d[4] = d[3]
-    _set_array(p, "dates", d)
+    set_array(p, "dates", d)
 
 
 def _irregular_dates(p: Path) -> None:
     d = _dates(p)
     d[5] += np.timedelta64(30, "m")
-    _set_array(p, "dates", d)
+    set_array(p, "dates", d)
 
 
 def _swap_latlon(p: Path) -> None:
     root = zarr.open_group(str(p), mode="r")
     lat, lon = root["latitudes"][:], root["longitudes"][:]
-    _set_array(p, "latitudes", lon)
-    _set_array(p, "longitudes", lat)
+    set_array(p, "latitudes", lon)
+    set_array(p, "longitudes", lat)
 
 
 def _constant_fields(p: Path) -> None:
-    _attrs(p, constant_fields=["T_2M"])
+    set_attrs(p, constant_fields=["T_2M"])
 
 
 # fault -> (mutation, check expected to report an ERROR without spec or reference, or None)
@@ -112,29 +95,29 @@ FAULTS = {
     "dates-swap": (_swap_dates, "dates_valid"),
     "dates-duplicate": (_duplicate_date, "dates_valid"),
     "dates-irregular": (_irregular_dates, "dates_valid"),
-    "frequency": (lambda p: _attrs(p, frequency="3h"), "frequency_consistent"),
-    "dates-attr": (lambda p: _attrs(p, start_date="2020-03-02T00:00:00"), "date_attrs_consistent"),
-    "missing-dates-outside": (lambda p: _attrs(p, missing_dates=["2021-01-01T00:00:00"]), "missing_dates_valid"),
-    "field-shape": (lambda p: _attrs(p, field_shape=[NG + 1]), "shape_consistent"),
-    "shape-attr": (lambda p: _attrs(p, shape=[NT, 9, 1, NG]), "shape_consistent"),
-    "lat-out-of-range": (lambda p: _set_array(p, "latitudes", np.linspace(80, 95, NG)), "coordinates_valid"),
+    "frequency": (lambda p: set_attrs(p, frequency="3h"), "frequency_consistent"),
+    "dates-attr": (lambda p: set_attrs(p, start_date="2020-03-02T00:00:00"), "date_attrs_consistent"),
+    "missing-dates-outside": (lambda p: set_attrs(p, missing_dates=["2021-01-01T00:00:00"]), "missing_dates_valid"),
+    "field-shape": (lambda p: set_attrs(p, field_shape=[NG + 1]), "shape_consistent"),
+    "shape-attr": (lambda p: set_attrs(p, shape=[NT, 9, 1, NG]), "shape_consistent"),
+    "lat-out-of-range": (lambda p: set_array(p, "latitudes", np.linspace(80, 95, NG)), "coordinates_valid"),
     "varmeta-unknown-variable": (lambda p: _varmeta_extra(p), "variables_metadata_consistent"),
     "constant-fields": (_constant_fields, "variables_metadata_consistent"),
-    "dates-nat": (lambda p: _set_array(p, "dates", _with(_dates(p), 2, np.datetime64("NaT", "s"))), "dates_valid"),
+    "dates-nat": (lambda p: set_array(p, "dates", _with(_dates(p), 2, np.datetime64("NaT", "s"))), "dates_valid"),
     "lat-not-finite":
-    (lambda p: _set_array(p, "latitudes", _with(np.linspace(45, 48, NG), 7, np.nan)), "coordinates_valid"),
-    "lat-shape": (lambda p: _set_array(p, "latitudes", np.linspace(45, 48, NG - 1)), "shape_consistent"),
-    "stats-shape": (lambda p: _set_array(p, "mean", np.zeros(len(VARIABLES) - 1)), "shape_consistent"),
+    (lambda p: set_array(p, "latitudes", _with(np.linspace(45, 48, NG), 7, np.nan)), "coordinates_valid"),
+    "lat-shape": (lambda p: set_array(p, "latitudes", np.linspace(45, 48, NG - 1)), "shape_consistent"),
+    "stats-shape": (lambda p: set_array(p, "mean", np.zeros(len(VARIABLES) - 1)), "shape_consistent"),
     "dates-count": (_drop_last_date, "shape_consistent"),
     # Only visible with a spec or a reference:
     "latlon-swap": (_swap_latlon, None),
-    "lat-offset": (lambda p: _set_array(p, "latitudes", np.linspace(45.5, 48.5, NG)), None),
+    "lat-offset": (lambda p: set_array(p, "latitudes", np.linspace(45.5, 48.5, NG)), None),
     "varmeta-level": (lambda p: _varmeta(p, "T_850", "levelist", 800), None),
     "varmeta-param": (lambda p: _varmeta(p, "T_2M", "param", "TD_2M"), None),
-    "missing-dates": (lambda p: _attrs(p, missing_dates=["2020-03-01T03:00:00"]), None),
-    "allow-nans": (lambda p: _attrs(p, allow_nans=True), None),
-    "resolution": (lambda p: _attrs(p, resolution="1km"), None),
-    "extra-attr": (lambda p: _attrs(p, extra_note="hello"), None),
+    "missing-dates": (lambda p: set_attrs(p, missing_dates=["2020-03-01T03:00:00"]), None),
+    "allow-nans": (lambda p: set_attrs(p, allow_nans=True), None),
+    "resolution": (lambda p: set_attrs(p, resolution="1km"), None),
+    "extra-attr": (lambda p: set_attrs(p, extra_note="hello"), None),
 }
 
 # fault -> checks expected to report an ERROR with the full spec (and the reference)
@@ -155,7 +138,7 @@ WITH_SPEC = {
 def _varmeta_extra(p: Path) -> None:
     metadata = json.loads((p / ".zattrs").read_text())["variables_metadata"]
     metadata["T_2M_COPY"] = {"mars": {"param": "T_2M"}}
-    _attrs(p, variables_metadata=metadata)
+    set_attrs(p, variables_metadata=metadata)
 
 
 @pytest.fixture
@@ -228,17 +211,17 @@ def test_units_from_spec(dataset_path, write_spec):
     assert f.severity == Severity.WARNING and "no units for 1 variables" in f.message
     metadata = json.loads((dataset_path / ".zattrs").read_text())["variables_metadata"]
     metadata["T_2M"]["units"] = "degC"
-    _attrs(dataset_path, variables_metadata=metadata)
+    set_attrs(dataset_path, variables_metadata=metadata)
     [f] = [f for f in _findings(dataset_path, spec) if f.check == "variables_metadata_match_spec"]
     assert f.severity == Severity.ERROR and f.variable == "T_2M"
 
 
 def test_many_findings_are_capped(dataset_path):
-    _set_array(dataset_path, "dates", _dates(dataset_path)[::-1].copy())
+    set_array(dataset_path, "dates", _dates(dataset_path)[::-1].copy())
     findings = [f for f in _findings(dataset_path, Spec()) if f.check == "dates_valid"]
     assert len(findings) == NT - 1  # below the cap
     metadata = {"T_2M": {}}
-    _attrs(dataset_path, variables_metadata=metadata)
+    set_attrs(dataset_path, variables_metadata=metadata)
     lacking = [f for f in _findings(dataset_path, Spec()) if f.check == "variables_metadata_consistent"]
     assert len(lacking) == len(VARIABLES) - 1
 
@@ -252,9 +235,9 @@ def test_frequency(text, step):
 def test_bad_frequency(dataset_path):
     with pytest.raises(ValueError):
         parse_frequency("hourly")
-    _attrs(dataset_path, frequency="hourly")
+    set_attrs(dataset_path, frequency="hourly")
     assert _error_checks(dataset_path, Spec()) == {"frequency_consistent"}
-    _attrs(dataset_path, frequency=None)
+    set_attrs(dataset_path, frequency=None)
     assert {f.check
             for f in _findings(dataset_path, Spec()) if f.severity == Severity.WARNING} == {"frequency_consistent"}
 
@@ -288,16 +271,16 @@ def test_constant_fields_both_directions(dataset_path):
 
 
 def test_duplicate_variable_names(dataset_path):
-    _attrs(dataset_path, variables=["FIS", "T_2M", "T_2M", "U_10M", "V_10M"])
+    set_attrs(dataset_path, variables=["FIS", "T_2M", "T_2M", "U_10M", "V_10M"])
     findings = [f for f in _findings(dataset_path, Spec()) if f.check == "shape_consistent"]
     assert [f.message for f in findings] == ["duplicate names in `variables`: ['T_2M']"]
 
 
 def test_metadata_warnings(dataset_path):
     """Things that are suspicious but not wrong: absent attributes, coordinates that look like radians."""
-    _attrs(dataset_path, start_date=None)
-    _set_array(dataset_path, "latitudes", np.linspace(0.78, 0.84, NG))
-    _set_array(dataset_path, "longitudes", np.linspace(0.08, 0.19, NG))
+    set_attrs(dataset_path, start_date=None)
+    set_array(dataset_path, "latitudes", np.linspace(0.78, 0.84, NG))
+    set_array(dataset_path, "longitudes", np.linspace(0.08, 0.19, NG))
     warnings_ = {(f.check, f.message) for f in _findings(dataset_path, Spec()) if f.severity == Severity.WARNING}
     assert ("date_attrs_consistent", "no `start_date` attribute") in warnings_
     assert {m
@@ -309,7 +292,7 @@ def test_metadata_warnings(dataset_path):
 
 def test_long_list_of_findings_is_capped(tmp_path):
     path = build_dataset(tmp_path / "long.zarr", nt=15)
-    _set_array(path, "dates", _dates(path)[::-1].copy())
+    set_array(path, "dates", _dates(path)[::-1].copy())
     findings = [f for f in _findings(path, Spec()) if f.check == "dates_valid"]
     assert len(findings) == 11 and findings[-1].message == "... and 4 more unordered dates"
 
@@ -326,6 +309,6 @@ def test_variables_metadata_entry_or_key_missing(dataset_path, write_spec):
 
 def test_missing_dates_with_space_separator(dataset_path):
     """`missing_dates` written as `2020-03-01 03:00:00` are still recognised as dates of the dataset."""
-    _attrs(dataset_path, missing_dates=["2020-03-01 03:00:00"])
+    set_attrs(dataset_path, missing_dates=["2020-03-01 03:00:00"])
     assert Dataset(dataset_path).missing_indices == {3}
     assert _error_checks(dataset_path, Spec()) == set()

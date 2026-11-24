@@ -216,7 +216,6 @@ Datasets in zarr format 2 and 3 are both supported; the hive needs zarr-python >
 
 ```bash
 uv sync && uv run pytest
-uv run pytest -m faulty    # all bees on Varda-tiny and its faulty variants (needs /scratch)
 ```
 
 Quality tools:

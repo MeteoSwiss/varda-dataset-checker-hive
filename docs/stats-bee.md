@@ -254,6 +254,8 @@ ICH1 1 km.
 
 ## Testing on Varda-tiny
 
-`uv run pytest -m faulty` runs stats-bee on the clean Varda-tiny dataset (expect no ERROR) and
-on each of its faulty `d-*` variants, and checks that the expected checks fire. See
-`tests/test_faulty_tiny.py` for the mapping from scenario to check.
+`tests/test_detection.py` (part of the default test run) runs stats-bee, meta-bee and spot-bee on a
+0.5 MB subset of Varda-tiny, `tests/data/varda-tiny-subset.zarr`: the clean subset (expect no ERROR) and
+each fault scenario of Varda-tiny, created in `tmp_path` with the primitives of `tests/faults.py`.
+It checks that the expected checks fire; the tables there map each scenario to its checks.
+`tests/data/make_varda_tiny_subset.py` rewrites the subset from the full dataset.

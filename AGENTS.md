@@ -33,12 +33,13 @@ uv run mypy src/varda_hive
 uv run yapf --diff --recursive src tests      # fix with: uv run yapf -r -i src tests
 ```
 
-Single test: `uv run pytest tests/test_bees.py::<test_name>`. The `faulty` marker is deselected by
-default (`addopts` in `pyproject.toml`); `uv run pytest -m faulty` runs on Varda-tiny on /scratch
-and skips when the data is missing (paths overridable via `HIVE_FAULTY_DIR` / `HIVE_CLEAN_DS`, see
-`tests/test_faulty_tiny.py`; spot-bee's GRIB tests also use `HIVE_ICH1_ROOT`, see
-`tests/test_spot_ich1.py`). The `fdb` marker (also deselected) runs FdbSource against a real FDB
-inside the FDB uenv, see `tests/test_fdb_realch1.py`. eccodes (`grib` extra) is in the `test` group, so `uv sync` installs it.
+Single test: `uv run pytest tests/test_bees.py::<test_name>`. The Varda-tiny fault scenarios run
+for stats-bee, meta-bee and spot-bee in the default suite (`tests/test_detection.py`), on a committed
+1.6 MB subset with its GRIB source (`tests/data/`, rewritten by `tests/data/make_varda_tiny_subset.py`)
+and the fault primitives of `tests/faults.py`; add new fault scenarios there. The `fdb` marker
+(deselected by default, `addopts` in `pyproject.toml`) runs FdbSource against a real FDB inside the
+FDB uenv, see `tests/test_fdb_realch1.py`. eccodes (`grib` extra) is in the `test` group, so
+`uv sync` installs it.
 
 ## Architecture in brief
 
