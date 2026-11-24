@@ -1,0 +1,4 @@
+# Code owners are requested for review on every pull request, see
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+# The email must be a verified email of the owner's GitHub account; a @handle works too.
+*  daniel.hupp@meteoswiss.ch

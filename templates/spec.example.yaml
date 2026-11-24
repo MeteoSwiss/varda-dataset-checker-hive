@@ -1,0 +1,113 @@
+# Example dataset spec for varda-dataset-checker-hive.
+# Copy this into the dataset's own repo (e.g. checks/<dataset>.yaml) and adapt, see
+# "Setting up a dataset" in the README. Every field is optional: checks that need a missing
+# field report "skipped" (an error with --strict). Unknown keys are rejected, so typos fail
+# loudly, and files named here must exist.
+
+name: varda-kenda-ch1-2km-2020-2020-1h-v1.0-pl13-test
+
+# Not read by the hive: YAML anchors shared by several variables below (`*wind`, `<<: *wind`).
+anchors:
+  wind: &wind {min: -80.0, max: 80.0, units: m s-1}
+  temperature: &temperature {min: 200.0, max: 330.0, units: K}
+
+# The exact set of variables (meta-bee), each with what is expected of it. A list of names
+# (`variables: [T_2M, U_10M]`) works too, without the per-variable checks. Per variable:
+#   min, max, units  physical range (stats-bee physical_ranges) and units (meta-bee); keep the bounds
+#                    loose: they catch unit errors and garbage, not unusual weather
+#   flag_values      exact values meaning "not determined" (e.g. [-999.9]), outside min/max (needed);
+#                    matched exactly in the stored dtype, skipped by physical_ranges, INFO share
+#   allow_nans       true if the variable may contain NaNs (default false), see `allow_nans` below
+#   constant         true if it never changes in time (the dataset's `constant_fields`)
+#   any other key    expected in the dataset's `variables_metadata.<variable>`, at its top level or
+#                    in its `mars` section (param, levtype, levelist, process, constant_in_time, ...);
+#                    write them from the anemoi recipe, not from the dataset you are about to check
+variables:
+  T_2M: {<<: *temperature, param: T_2M, levtype: sfc}
+  T_850: {<<: *temperature, max: 320.0, param: T, levtype: pl, levelist: 850}
+  U_10M: {<<: *wind, param: U_10M, levtype: sfc}
+  V_10M: {<<: *wind, param: V_10M, levtype: sfc}
+  CIN_MU: {min: -2000.0, max: 0.0, units: J kg-1, allow_nans: true, param: CIN_MU, levtype: sfc}
+  CIN_ML: {min: 0.0, max: 10000.0, units: J kg-1, flag_values: [-999.9], param: CIN_ML, levtype: sfc}
+  FIS: {constant: true, param: FIS, levtype: sfc, constant_in_time: true}
+  cos_latitude: {computed_forcing: true, constant_in_time: true}
+
+# meta-bee: expected structure, from the anemoi recipe (consistency checks need nothing)
+start_date: 2020-03-01T00:00:00
+end_date: 2020-03-30T23:00:00
+frequency: 1h
+grid_points: 30676
+resolution: 2km                              # the `resolution` attribute
+bbox: {lat_min: 45.43, lat_max: 48.19, lon_min: 5.25, lon_max: 11.03, tolerance: 0.01}   # grid extent, degrees
+# With a `variables` mapping, `allow_nans` comes from the variables marked `allow_nans: true`
+# (none: no NaNs). Otherwise give it here: true, false, or a list of variables [CIN_MU, SNOWLMT].
+# allow_nans: false
+missing_dates: []                            # dates the dataset may list as missing
+
+# Reference of the accepted version, for meta-bee (metadata and structure) and stats-bee
+# (statistics): the `ref.yaml` that `hive data.zarr --spec <this file> --out hive/` writes,
+# committed in refs/ next to the spec (a relative path resolves against the spec's directory). While
+# it does not exist, the reference checks are skipped (the first reference). A zarr (meta-bee only)
+# works too.
+reference: refs/data.ref.yaml
+# meta-bee: change the severity of differences to the reference (globs on the dotted path, see
+# `hive compare --all`). Defaults: structure ERROR, other metadata WARNING, churn ignored.
+reference_policy:
+  ignore: [variables_metadata.*.mars.date]   # the build date of each field
+  error: []
+  warning: []
+  info: []
+
+# stats-bee: calibrated tolerances for statistics_consistent. Uncomment once written with
+# `stats-bee calibrate data.zarr --spec <this file> -o refs/<dataset>.tolerances.yaml`; recalibrate when `sampling` changes.
+# calibrated_tolerances: refs/<dataset>.tolerances.yaml
+
+# Seeded sampling used by stats-bee and spot-bee
+sampling:
+  seed: 0
+  n_dates: 20           # random dates over the period (start_date..end_date), or "all"
+  n_points: 10000       # grid points, or "all": stats-bee's mean/stdev per date (min/max/NaN always full
+                        # domain) and the points spot-bee compares with the source
+  include_dates: []     # dates always checked in addition, e.g. [2020-03-01T06:00:00]
+
+tolerances:
+  statistics_rtol: 1.0e-5   # recomputed vs stored statistics: floating-point part
+  z_threshold: 5.0          #   ... plus z_threshold * sampling error (0 for n_dates: all)
+  compare_atol_stdev: 0.0   # stats file vs reference: "close" within this * stdev, else "differs"
+  source_rtol: 1.0e-4       # spot-bee: dataset vs source values, |diff| <= atol + rtol * |source|
+  source_atol: 0.0          #   no absolute default: it would hide faults in small-valued fields
+  source_per_variable: {}   # overrides, e.g. {TOT_PREC_1H: {atol: 1.0e-6}, T_2M_C: {atol: 1.0e-4}}
+
+# Accepted warnings, demoted to INFO: {check: [variables]}, "*" for all variables
+ignore_warnings:
+  statistics_consistent: [insolation]   # diurnal field, a small sample can't resolve its mean
+
+# spot-bee: where the original values come from. "file.py:Class" (relative to
+# this file) or "package.module:Class"; `args` are passed to the constructor.
+# Uncomment and adapt, see docs/spot-bee.md (GribIndexSource needs the `grib` extra).
+# source:
+#   plugin: varda_hive.sources.grib_index:GribIndexSource
+#   args:
+#     root: /path/to/dataset-repo           # base of the index and GRIB paths; default: this file's directory
+#     indexes: {ana: grib-index-ana.db, fg: [fg-day1.db, fg-day2.db]}   # a DB or a list of DBs
+#     default_index: ana                    # default: the first index
+#     variables:                            # overrides of the mapping from variables_metadata.mars
+#       TOT_PREC_1H: {index: fg, match: {shortName: TOT_PREC}, scale: 0.001}   # value * scale + offset
+#       T_2M_C: {match: {shortName: T_2M}, offset: -273.15}   # near 0 needs an atol, see source_per_variable
+#     skip: {TOT_PREC_6H: 6 h accumulation}
+#     pl_type_of_level: isobaricInhPa       # typeOfLevel matched for levtype pl
+#     members: [0, 1, 2]                    # GRIB `number` of each ensemble member, default 0, 1, ...
+#     check_grid: true                      # GRIB coordinates vs the dataset's (regular/reduced ll and gg grids)
+# or FDB (the `fdb` extra; FDB5_CONFIG_FILE, ECCODES_DEFINITION_PATH as for the build):
+#   plugin: varda_hive.sources.fdb:FdbSource
+#   args:
+#     fdb_config: null                      # dict as in the recipe; null: FDB5_CONFIG_FILE
+#     request: {class: rd, stream: reanl, expver: r001, model: icon-rea-l-ch1, type: cf}
+#     offset_from_date: true                # date=YYYYMMDD, time=0000, step=offset from midnight
+#     step_zero_from_previous_date: [VMAX_10M]   # step 0 -> previous date, step 24h (or true for all)
+#     variables:                            # overrides of the request from variables_metadata
+#       CLCL: {request: {levtype: pl, levelist: 800}}
+#     skip: {CIN_MU: masked below -999}
+# or another anemoi zarr, e.g. a trusted copy (templates/source_plugin_example.py):
+#   plugin: source_plugin_example.py:ZarrSource
+#   args: {path: /path/to/reference.zarr}

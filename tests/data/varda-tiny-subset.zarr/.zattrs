@@ -1,0 +1,145 @@
+{
+  "allow_nans": false,
+  "attribution": "MeteoSwiss",
+  "chunks": [
+    48,
+    9,
+    1,
+    503
+  ],
+  "constant_fields": [
+    "FIS"
+  ],
+  "description": "Subset of Varda-tiny (varda-kenda-ch1-2km-2020-2020-1h-v1.0-pl13-test.zarr) for the hive's tests: 9 variables, 48 dates, every 61th grid point. Written by tests/data/make_varda_tiny_subset.py.",
+  "dtype": "float32",
+  "end_date": "2020-03-05T23:00:00",
+  "ensemble_dimension": 1,
+  "field_shape": [
+    503
+  ],
+  "flatten_grid": true,
+  "frequency": "1h",
+  "last_date": "2020-03-05 23:00:00",
+  "latest_write_timestamp": "2026-08-19T13:00:52.155800",
+  "licence": "CC BY 4.0",
+  "missing_dates": [],
+  "order_by": [
+    "valid_datetime",
+    "param_level",
+    "number"
+  ],
+  "proj_string": null,
+  "remapping": {
+    "param_level": "{param}_{levelist}"
+  },
+  "resolution": "unknown",
+  "shape": [
+    48,
+    9,
+    1,
+    503
+  ],
+  "start_date": "2020-03-04T00:00:00",
+  "statistics_end_date": "2020-03-05T15:00:00",
+  "statistics_start_date": "2020-03-04T00:00:00",
+  "uuid": "21e3d169-5382-4a5b-b5ee-03afc273b61e",
+  "variables": [
+    "FIS",
+    "T_2M",
+    "T_700",
+    "T_850",
+    "U_10M",
+    "V_10M",
+    "PS",
+    "TOT_PREC_1H",
+    "CLCT"
+  ],
+  "variables_metadata": {
+    "FIS": {
+      "constant_in_time": true,
+      "mars": {
+        "date": 20200301,
+        "levelist": null,
+        "levtype": "sfc",
+        "param": "FIS",
+        "step": 0,
+        "time": 0
+      }
+    },
+    "T_2M": {
+      "mars": {
+        "date": 20200301,
+        "levtype": "sfc",
+        "param": "T_2M",
+        "step": "0m",
+        "time": 0
+      }
+    },
+    "T_700": {
+      "mars": {
+        "date": 20200301,
+        "levelist": 700,
+        "levtype": "pl",
+        "param": "T",
+        "step": "0m",
+        "time": 0
+      }
+    },
+    "T_850": {
+      "mars": {
+        "date": 20200301,
+        "levelist": 850,
+        "levtype": "pl",
+        "param": "T",
+        "step": "0m",
+        "time": 0
+      }
+    },
+    "U_10M": {
+      "mars": {
+        "date": 20200301,
+        "levtype": "sfc",
+        "param": "U_10M",
+        "step": "0m",
+        "time": 0
+      }
+    },
+    "V_10M": {
+      "mars": {
+        "date": 20200301,
+        "levtype": "sfc",
+        "param": "V_10M",
+        "step": "0m",
+        "time": 0
+      }
+    },
+    "PS": {
+      "mars": {
+        "date": 20200301,
+        "levtype": "sfc",
+        "param": "PS",
+        "step": "0m",
+        "time": 0
+      }
+    },
+    "TOT_PREC_1H": {
+      "mars": {
+        "date": 20200229,
+        "levtype": "sfc",
+        "param": "TOT_PREC_1H",
+        "step": 1,
+        "time": 2300
+      }
+    },
+    "CLCT": {
+      "mars": {
+        "date": 20200301,
+        "levtype": "sfc",
+        "param": "CLCT",
+        "step": "0m",
+        "time": 0
+      }
+    }
+  },
+  "version": "0.14"
+}
