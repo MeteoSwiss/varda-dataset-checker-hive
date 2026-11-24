@@ -96,7 +96,8 @@ def _run_checks(args: Namespace, bees: list[str], prog: str) -> int:
     _print_report(report, args)  # first, so a failure to write --out does not lose the findings
     if out is not None:
         out.mkdir(parents=True, exist_ok=True)
-        (out / "report.md").write_text(to_markdown(report) + "\n", encoding="utf-8")
+        md = to_markdown(report, fail_on=Severity[args.fail_on.upper()], strict=args.strict)
+        (out / "report.md").write_text(md + "\n", encoding="utf-8")
         (out / "report.json").write_text(to_json(report) + "\n", encoding="utf-8")
         save_ref(sections, out / "ref.yaml")
     return report.exit_code(Severity[args.fail_on.upper()], strict=args.strict)
@@ -106,7 +107,9 @@ def _print_report(report: Report, args: Namespace, tables: str = "") -> None:
     if args.format == "json":
         print(to_json(report))
     elif args.format == "markdown":
-        print(to_markdown(report, details=not tables) + ("\n" + tables if tables else ""))
+        fail_on = Severity[getattr(args, "fail_on", "error").upper()]
+        md = to_markdown(report, details=not tables, fail_on=fail_on, strict=getattr(args, "strict", False))
+        print(md + ("\n" + tables if tables else ""))
     else:
         if tables:
             print(tables)

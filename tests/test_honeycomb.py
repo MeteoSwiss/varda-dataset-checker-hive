@@ -84,6 +84,12 @@ def test_spec_empty_and_strict(write_spec):
     assert load_spec(write_spec("frequency: PT6H\n")).frequency == "PT6H"
 
 
+@pytest.mark.parametrize("text", ["frequency: 0h", "sampling: {n_dates: 0}", "sampling: {n_points: -1}"])
+def test_spec_rejects_empty_sampling_and_zero_frequency(write_spec, text):
+    with pytest.raises(ValidationError):
+        load_spec(write_spec(text + "\n"))
+
+
 def test_spec_resolves_relative_paths(write_spec, tmp_path):
     write_spec("{}", name="ref.yaml")
     spec = load_spec(write_spec("reference: ref.yaml\nsampling: {n_dates: 2}\n"))
@@ -282,6 +288,15 @@ def test_load_source_from_file(write_spec, tmp_path, dataset_path):
     spec = load_spec(write_spec("source: {plugin: my_source.py:S, args: {scale: 2}}\n"))
     assert load_source(spec).scale == 2
     assert load_source(Spec()) is None
+
+
+def test_load_source_from_file_with_dataclass(write_spec, tmp_path):
+    """dataclasses resolves string annotations through sys.modules, so the module must be registered."""
+    (tmp_path / "dc_source.py").write_text("from __future__ import annotations\n"
+                                           "from dataclasses import dataclass\n"
+                                           "@dataclass\nclass S:\n    scale: float = 1.0\n"
+                                           "    def fetch(self, variable, date):\n        return None\n")
+    assert load_source(load_spec(write_spec("source: {plugin: dc_source.py:S, args: {scale: 2}}\n"))).scale == 2
 
 
 def test_load_source_passes_base_dir(write_spec, tmp_path):

@@ -44,7 +44,7 @@ import numpy as np
 
 from ... import __version__
 from ...honeycomb import Dataset, Finding, Spec, error, info, warning
-from ...honeycomb.dataset import STATISTICS
+from ...honeycomb.dataset import STATISTICS, parse_date
 from ...honeycomb.files import read_file, save_file
 from ...honeycomb.sampling import sample_points, sampled_dates
 
@@ -68,9 +68,9 @@ def statistics_window(ds: Dataset) -> tuple[int, int]:
     """Time indices [lo, hi) the stored statistics were computed over."""
     lo, hi = 0, len(ds.dates)
     if start := ds.attrs.get("statistics_start_date"):
-        lo = int(np.searchsorted(ds.dates, np.datetime64(start, "s"), side="left"))
+        lo = int(np.searchsorted(ds.dates, parse_date(start), side="left"))
     if end := ds.attrs.get("statistics_end_date"):
-        hi = int(np.searchsorted(ds.dates, np.datetime64(end, "s"), side="right"))
+        hi = int(np.searchsorted(ds.dates, parse_date(end), side="right"))
     return lo, hi
 
 

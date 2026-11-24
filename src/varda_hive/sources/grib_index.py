@@ -16,7 +16,8 @@ Which message belongs to a variable comes from the dataset's `variables_metadata
 - otherwise: shortName = param, and level = levelist if the metadata has a levelist and the index a
   `level` column
 
-and from the spec args where that is not enough (renamed or rescaled fields, other indexes):
+and from the spec args where that is not enough (renamed or rescaled fields, other indexes). An
+override without `match` keeps the match from the metadata:
 
     source:
       plugin: varda_hive.sources.grib_index:GribIndexSource
@@ -130,31 +131,30 @@ class GribIndexSource:  # pylint: disable=too-many-instance-attributes
         if name in self.skip:
             return str(self.skip[name])
         if name in self.overrides:
-            override = dict(self.overrides[name])
+            # `W_SO:` in YAML is None: an override without keys, like `{}`
+            override = dict(self.overrides[name] or {})
             unknown = set(override) - {"index", "match", "scale", "offset"}
             if unknown:
                 raise ValueError(f"unknown keys {sorted(unknown)}")
-            target = _Target(index=str(override.get("index", self.default_index)),
-                             match={
-                                 str(k): _text(v)
-                                 for k, v in (override.get("match") or {}).items()
-                             },
+            index = str(override.get("index", self.default_index))
+            if index not in self.indexes:
+                raise ValueError(f"index {index!r} is not one of {sorted(self.indexes)}")
+            if override.get("match") is not None:
+                match = {str(k): _text(v) for k, v in override["match"].items()}
+            elif isinstance(meta.get("mars"), dict) and "param" in meta["mars"]:
+                match = self._match_from_metadata(meta["mars"], index)
+            else:
+                raise ValueError("no `match` and no mars param in the metadata: give a `match`")
+            target = _Target(index=index,
+                             match=match,
                              scale=float(override.get("scale", 1.0)),
                              offset=float(override.get("offset", 0.0)))
         else:
             reason = not_comparable(meta)
             if reason:
                 return reason
-            mars = meta["mars"]
-            match = {"shortName": _text(mars["param"])}
-            levelist = mars.get("levelist")
-            if mars.get("levtype") == "pl":
-                if levelist is None:
-                    raise ValueError("pressure-level variable without `levelist` in its mars metadata")
-                match |= {"level": _text(levelist), "typeOfLevel": self.pl_type_of_level}
-            elif levelist is not None and "level" in self.indexes[self.default_index].columns:
-                match["level"] = _text(levelist)
-            target = _Target(index=self.default_index, match=match)
+            target = _Target(index=self.default_index,
+                             match=self._match_from_metadata(meta["mars"], self.default_index))
         if target.index not in self.indexes:
             raise ValueError(f"index {target.index!r} is not one of {sorted(self.indexes)}")
         if not target.match:
@@ -167,6 +167,17 @@ class GribIndexSource:  # pylint: disable=too-many-instance-attributes
             raise ValueError(f"`number` is matched ({self.n_members} dataset members) but index {target.index!r} "
                              "has no `number` column")
         return target
+
+    def _match_from_metadata(self, mars: dict[str, Any], index: str) -> dict[str, str]:
+        match = {"shortName": _text(mars["param"])}
+        levelist = mars.get("levelist")
+        if mars.get("levtype") == "pl":
+            if levelist is None:
+                raise ValueError("pressure-level variable without `levelist` in its mars metadata")
+            match |= {"level": _text(levelist), "typeOfLevel": self.pl_type_of_level}
+        elif levelist is not None and "level" in self.indexes[index].columns:
+            match["level"] = _text(levelist)
+        return match
 
     def fetch(self, variable: str, date: np.datetime64) -> np.ndarray | None:
         target = resolve(self.targets, variable)

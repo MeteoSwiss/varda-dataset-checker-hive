@@ -247,3 +247,23 @@ def test_stored_maximum_none_does_not_crash(flagged):
     assert _findings(flagged, _ranges_spec()) == []
     zarr.open_group(str(flagged), mode="r+")["minimum"][CIN] = np.nan
     assert _findings(flagged, _ranges_spec()) == []
+
+
+def test_stored_maximum_flag_is_not_an_error(flagged):
+    """A flag above `max` (e.g. 99999 for "missing") is in anemoi's stored maximum."""
+    data = zarr.open_group(str(flagged), mode="r")["data"][:, CIN]
+    _store(flagged, np.where(data == np.float32(-999.9), np.float32(99999.0), data))
+    spec = Spec(variables={"CIN_ML": {**VARS, "flag_values": [99999.0]}}, sampling={"n_dates": "all"})
+    assert zarr.open_group(str(flagged), mode="r")["maximum"][CIN] == 99999.0
+    assert _findings(flagged, spec) == []
+    zarr.open_group(str(flagged), mode="r+")["maximum"][CIN] = 20000.0
+    [f] = _findings(flagged, spec)
+    assert f.time is None and "stored minimum/maximum" in f.message
+
+
+def test_all_flag_date_is_not_spatially_constant(flagged):
+    warnings_ = _findings(flagged, _ranges_spec(), "constant_fields", Severity.WARNING)
+    assert not [f for f in warnings_ if "spatially constant" in f.message]
+    # without flag_values, an all -999.9 date is a field set to one value
+    warnings_ = _findings(flagged, _ranges_spec(flags=False), "constant_fields", Severity.WARNING)
+    assert [f.time for f in warnings_ if "spatially constant" in f.message] == ["2020-03-01T07:00:00"]

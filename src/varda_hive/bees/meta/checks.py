@@ -29,6 +29,14 @@ MAX_LISTED = 10  # findings of one kind before the rest are summarised in one
 _COORDINATES = (("latitudes", -90, 90, math.pi), ("longitudes", -180, 360, 2 * math.pi))
 
 
+def _date_or_none(value: Any) -> np.datetime64 | None:
+    """A date attribute, or None if it does not parse."""
+    try:
+        return parse_date(value)
+    except ValueError:
+        return None
+
+
 def _step(ds: Dataset) -> np.timedelta64 | None:
     """The most common positive step between dates, None for fewer than 2 dates."""
     diffs = np.diff(ds.dates)
@@ -116,7 +124,9 @@ def date_attrs_consistent(ctx: CheckContext) -> Iterator[Finding]:
         value = ds.attrs.get(key)
         if value is None:
             yield warning(f"no `{key}` attribute")
-        elif parse_date(value) != actual:
+        elif (date := _date_or_none(value)) is None:
+            yield error(f"`{key}` attribute {value!r} is not a date")
+        elif date != actual:
             yield error(
                 f"`{key}` attribute is {value} but the dates {'start' if key == 'start_date' else 'end'} "
                 f"at {actual}",
@@ -133,8 +143,9 @@ def missing_dates_valid(ctx: CheckContext) -> Iterator[Finding]:
     missing = ds.attrs.get("missing_dates") or []
     dates = set(ds.dates.tolist())
     for value in missing:
-        date = parse_date(value)
-        if date.astype(object) not in dates:
+        if (date := _date_or_none(value)) is None:
+            yield error(f"`missing_dates` entry {value!r} is not a date")
+        elif date.astype(object) not in dates:
             yield error(f"`missing_dates` lists {value}, which is not one of the dates", time=str(date))
         else:
             yield info("date listed as missing: excluded from the statistics and from training", time=str(date))
@@ -151,9 +162,11 @@ def shape_consistent(ctx: CheckContext) -> Iterator[Finding]:
     n_time, n_var, _, n_grid = shape
     if (attr := ds.attrs.get("shape")) is not None and tuple(attr) != shape:
         yield error(f"`shape` attribute {list(attr)} differs from the `data` array {list(shape)}")
-    if len(ds.variables) != n_var:
+    if "variables" not in ds.attrs:
+        yield error("no `variables` attribute: the variables cannot be named")
+    elif len(ds.variables) != n_var:
         yield error(f"{len(ds.variables)} names in `variables` but {n_var} variables in `data`")
-    if len(set(ds.variables)) != len(ds.variables):
+    if "variables" in ds.attrs and len(set(ds.variables)) != len(ds.variables):
         dups = sorted({v for v in ds.variables if ds.variables.count(v) > 1})
         yield error(f"duplicate names in `variables`: {dups}")
     if len(ds.dates) != n_time:

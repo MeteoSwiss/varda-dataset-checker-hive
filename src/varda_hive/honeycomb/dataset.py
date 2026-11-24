@@ -109,6 +109,9 @@ class Dataset:
 
     @cached_property
     def variables(self) -> list[str]:
+        """The `variables` attribute; ValueError without one (meta-bee's shape_consistent reports it)."""
+        if "variables" not in self.attrs:
+            raise ValueError("dataset has no `variables` attribute")
         return list(self.attrs["variables"])
 
     def index(self, variable: str) -> int:

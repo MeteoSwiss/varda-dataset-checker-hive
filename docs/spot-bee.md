@@ -153,10 +153,12 @@ An override gives:
 | key | meaning | default |
 |---|---|---|
 | `index` | which index to search | `default_index` |
-| `match` | the index columns to match | |
+| `match` | the index columns to match | from the mars metadata, as without an override |
 | `scale`, `offset` | applied as `value * scale + offset` | `1`, `0` |
 
-The `match` keys must be columns of the index. A configuration error of one variable (unknown key or
+The `match` keys must be columns of the index. An override without `match` (also `VAR:` or `VAR: {}`)
+matches as from the metadata, so it can change only the index, scale or offset, or compare a constant
+field. A configuration error of one variable (unknown key or
 index, a column the index lacks, an empty `match`, a `pl` variable without `levelist`) gives one ERROR
 for that variable, and the other variables are still compared. Errors of the source as a whole (a DB
 that does not exist, an index without DBs, `members` of the wrong length) stop the check. Index values

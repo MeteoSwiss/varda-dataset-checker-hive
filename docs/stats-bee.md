@@ -94,15 +94,17 @@ For a variable with flags, `physical_ranges` does the following:
   counts in the share below.
 - **one INFO per variable** gives the share of flag values over the sampled dates and points, e.g.
   "CIN_ML: 61.8% flag values (-999.9) on 54 sampled dates".
-- **stored maximum** is checked as for any variable. **Stored minimum** is checked only when it is
-  not a flag, because anemoi counts the flags in its statistics, so a stored minimum of -999.9 is
-  expected.
+- **stored minimum and maximum** are checked only when they are not a flag, because anemoi counts
+  the flags in its statistics: a stored minimum of -999.9 (or a maximum of 9999 for a flag above
+  `max`) is expected.
+- **`constant_fields`** looks for a spatially constant field on the non-flag values, so a date whose
+  values are all flags is not reported.
 
 Without `flag_values`, `physical_ranges` is unchanged. The `min` and `max` of the spec must still
 cover the real values, so `min: -1000` is no longer needed to pass the flags.
 
-`statistics_consistent`, `matches_reference_stats`, `constant_fields`, `finite_values` and spot-bee
-are unchanged on purpose. anemoi includes the flags in its stored statistics, so comparing them with
+`statistics_consistent`, `matches_reference_stats`, `finite_values`, the constant-in-time part of
+`constant_fields` and spot-bee are unchanged on purpose. anemoi includes the flags in its stored statistics, so comparing them with
 the sample (which also includes the flags) compares like with like.
 
 The sample keeps the minimum, maximum, mean and stdev over all values, flags included. The

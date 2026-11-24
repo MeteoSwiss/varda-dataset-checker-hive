@@ -13,8 +13,9 @@ unset field skip themselves with an INFO finding.
 from datetime import datetime
 import math
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
+import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 import yaml
 
@@ -29,11 +30,11 @@ class _Strict(BaseModel):
 class Sampling(_Strict):
     seed: int = 0
     # Random dates on the period, or "all" for a full pass (exact statistics, but reads every step).
-    n_dates: int | Literal["all"] = 5
+    n_dates: Annotated[int, Field(ge=1)] | Literal["all"] = 5
     # Grid points per date, the same points on every date, or "all" for the full domain. stats-bee
     # computes mean/stdev on them (min/max and NaN/inf always cover the full domain); spot-bee
     # compares them with the source.
-    n_points: int | Literal["all"] = 1000
+    n_points: Annotated[int, Field(ge=1)] | Literal["all"] = 1000
     # Dates always included in the sample, in addition to the random ones.
     include_dates: list[datetime] = Field(default_factory=list)
 
@@ -191,8 +192,8 @@ class Spec(_Strict):  # pylint: disable=too-many-instance-attributes
     @field_validator("frequency")
     @classmethod
     def _valid_frequency(cls, value: str | None) -> str | None:
-        if value is not None:
-            parse_frequency(value)  # ValueError -> ValidationError
+        if value is not None and parse_frequency(value) <= np.timedelta64(0, "s"):  # ValueError -> ValidationError
+            raise ValueError(f"frequency must be positive, got {value!r}")
         return value
 
     @field_validator("variables", mode="before")

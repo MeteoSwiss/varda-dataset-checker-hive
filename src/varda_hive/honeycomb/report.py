@@ -40,20 +40,27 @@ def _md_table(findings: list[Finding]) -> list[str]:
     return lines
 
 
-def to_markdown(report: Report, details: bool = True) -> str:
-    """A summary line, a table of the errors and warnings, and the info findings in a collapsed
-    `<details>` block (left out with `details=False`)."""
+def to_markdown(report: Report, details: bool = True, fail_on: Severity = Severity.ERROR, strict: bool = False) -> str:
+    """A summary line, a table of the errors and warnings (and, with `strict`, the skipped checks),
+    and the other info findings in a collapsed `<details>` block (left out with `details=False`).
+    The verdict agrees with the exit code for the same `fail_on` and `strict`."""
     errors, warnings_ = report.count(Severity.ERROR), report.count(Severity.WARNING)
-    verdict = "failed" if errors else ("passed with warnings" if warnings_ else "passed")
+    if report.exit_code(fail_on, strict):
+        verdict = "failed"
+    else:
+        verdict = "passed with warnings" if warnings_ else "passed"
     lines = [
         f"### varda-hive: {verdict}", "", f"`{report.dataset}`", "",
         f"{len(report.checks_run)} checks run: **{errors} error**, **{warnings_} warning**, "
         f"{report.count(Severity.INFO)} info", ""
     ]
-    serious = [f for f in report.findings if f.severity >= Severity.WARNING]
-    if serious:
-        lines += [*_md_table(serious), ""]
-    rest = [f for f in report.findings if f.severity < Severity.WARNING]
+
+    def serious(f: Finding) -> bool:
+        return f.severity >= Severity.WARNING or (strict and f.skipped)
+
+    if shown := [f for f in report.findings if serious(f)]:
+        lines += [*_md_table(shown), ""]
+    rest = [f for f in report.findings if not serious(f)]
     if details and rest:
         lines += [f"<details><summary>{len(rest)} info findings</summary>", "", *_md_table(rest), "", "</details>", ""]
     return "\n".join(lines)

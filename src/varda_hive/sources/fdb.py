@@ -160,11 +160,11 @@ class FdbSource:  # pylint: disable=too-many-instance-attributes
 
 
 def _request_from_metadata(meta: dict[str, Any]) -> dict[str, str]:
-    """param (paramId if known), levtype and levelist of a variables_metadata entry."""
+    """param (paramId if known), levtype and levelist of a variables_metadata entry, those it has."""
     mars = meta["mars"]
     grib: dict[str, Any] = meta["grib"] if isinstance(meta.get("grib"), dict) else {}
-    param = grib.get("paramId") or mars["param"]
-    out = {"param": text(param)}
+    param = grib.get("paramId") or mars.get("param")
+    out = {"param": text(param)} if param is not None else {}
     if mars.get("levtype") is not None:
         out["levtype"] = text(mars["levtype"])
     if mars.get("levelist") is not None:

@@ -253,6 +253,15 @@ def test_grib_config_errors(archive, dataset_path, tmp_path):
     assert "lists no DB" in err.message
 
 
+@pytest.mark.parametrize("override", [None, {}])
+def test_grib_override_without_match_uses_metadata(archive, dataset_path, override):
+    """`V_10M:` (None) or `{}`: the match comes from the metadata, as without an override."""
+    archive.add_clean()
+    findings = _findings(dataset_path, archive.spec(variables={"V_10M": override}))
+    assert _errors(findings) == []
+    assert "V_10M" in _summary(findings).details["identical"]
+
+
 def test_grib_metadata_mapping(archive, dataset_path):
     """Not-comparable reasons and level matching from variables_metadata."""
     archive.add_clean(skip={("V_10M", t) for t in range(len(archive.dates))})

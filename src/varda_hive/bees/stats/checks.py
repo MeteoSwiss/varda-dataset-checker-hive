@@ -14,7 +14,7 @@ from typing import Any, Generator, Iterator
 import numpy as np
 
 from ...honeycomb import CheckContext, Finding, PhysicalRange, bee_dump, check, dumps, error, info, skipped, warning
-from ...honeycomb.dataset import is_zarr
+from ...honeycomb.dataset import is_zarr, parse_date
 from ...honeycomb.files import provides
 from .calibrate import load_tolerances, mismatch
 from .statsfile import FORMAT, Sample, compare_stats, compute_sample, load_stats, stats_file
@@ -187,8 +187,8 @@ def physical_ranges(ctx: CheckContext) -> Iterator[Finding]:
     A variable with `flag_values` (exact values meaning "not determined", matched in the stored
     dtype) is tested on its non-flag values: per date `valid_minimum`/`valid_maximum` (a date with
     only flags is not an error), and one INFO gives the flag share of the sampled dates. The stored
-    maximum is checked as usual; the stored minimum only if it is not a flag, since anemoi counted
-    the flags in its statistics and they cannot be filtered out.
+    minimum and maximum are checked unless they are a flag, since anemoi counted the flags in its
+    statistics and they cannot be filtered out.
     """
     ranges = ctx.spec.ranges()
     if not ranges:
@@ -238,14 +238,18 @@ def _flag_share(sample: Sample, name: str, flags: list[float]) -> Finding:
 
 
 def _stored_range(name: str, stored: dict[str, Any], bounds: PhysicalRange, flags: list[float]) -> Finding | None:
-    """ERROR if the stored minimum (unless it is a flag) or maximum is outside the range. Each is
-    checked only if finite (None)."""
+    """ERROR if the stored minimum or maximum is outside the range. Each is checked only if finite
+    (None) and not a flag value: anemoi counts the flags in its statistics, and they may lie on
+    either side of the range."""
     lo, hi = bounds.min, bounds.max
     smin, smax = stored.get("minimum"), stored.get("maximum")
-    checked_min = smin
-    if smin is not None and flags and bool(np.isin(np.float32(smin), np.asarray(flags, dtype=np.float32))):
-        checked_min = None
-    if (checked_min is not None and checked_min < lo) or (smax is not None and smax > hi):
+
+    def checked(value: float | None) -> float | None:
+        flagged = value is not None and flags and bool(np.isin(np.float32(value), np.asarray(flags, dtype=np.float32)))
+        return None if flagged else value
+
+    checked_min, checked_max = checked(smin), checked(smax)
+    if (checked_min is not None and checked_min < lo) or (checked_max is not None and checked_max > hi):
         shown = ", ".join("n/a" if x is None else f"{x:.6g}" for x in (smin, smax))
         return error(f"stored minimum/maximum [{shown}] outside physical range [{lo}, {hi}] {bounds.units}",
                      variable=name)
@@ -304,7 +308,11 @@ def statistics_window_valid(ctx: CheckContext) -> Iterator[Finding]:
         if (value := ds.attrs.get(key)) is None:
             yield warning(f"no `{key}` attribute: assuming the statistics cover all dates")
             continue
-        bounds[key] = date = np.datetime64(value, "s")
+        try:
+            bounds[key] = date = parse_date(value)
+        except ValueError:
+            yield error(f"`{key}` attribute {value!r} is not a date")
+            continue
         if not first <= date <= last:
             yield error(f"{key} {date} outside the dataset's dates [{first}, {last}]",
                         details={
@@ -332,6 +340,7 @@ def constant_fields(ctx: CheckContext) -> Iterator[Finding]:
         listed = ctx.spec.constant_field_names() or []
     # Forcings like cos_julian_day, or insolation at night, are legitimately uniform in space.
     forcings = {v for v, m in ctx.dataset.attrs.get("variables_metadata", {}).items() if m.get("computed_forcing")}
+    flagged = {v for v, r in ctx.spec.ranges().items() if r.flag_values}
     for name in sample.variables:
         per_date = sample.per_date(name)
         # Dates without any finite value are reported by finite_values, not as a change.
@@ -351,10 +360,12 @@ def constant_fields(ctx: CheckContext) -> Iterator[Finding]:
                         })
         elif name not in listed and not changed:
             yield warning(f"identical on all {len(summaries)} sampled dates but not in constant_fields", variable=name)
-        # A whole field set to one value (e.g. zeroed), unless the variable is constant anyway.
+        # A whole field set to one value (e.g. zeroed), unless the variable is constant anyway. With
+        # flag_values, on the non-flag values: a date with only flags is not a fault.
         stored = sample.stored[name]
+        keys = ("valid_minimum", "valid_maximum") if name in flagged else ("minimum", "maximum")
         if name not in forcings and stored.get("minimum") != stored.get("maximum"):
-            for date, vmin, vmax in zip(sample.dates, per_date["minimum"], per_date["maximum"]):
+            for date, vmin, vmax in zip(sample.dates, per_date[keys[0]], per_date[keys[1]]):
                 if vmin is not None and vmin == vmax:  # over the full domain
                     yield warning(f"spatially constant field (all values {vmin})", variable=name, time=date)
 

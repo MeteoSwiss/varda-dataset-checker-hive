@@ -20,6 +20,7 @@ import importlib
 import importlib.util
 import inspect
 from pathlib import Path
+import sys
 from typing import Protocol, runtime_checkable
 
 import numpy as np
@@ -49,11 +50,19 @@ def load_source(spec: Spec) -> Source | None:
         path = Path(target)
         if not path.is_absolute():
             path = spec.base_dir / path
-        module_spec = importlib.util.spec_from_file_location(path.stem, path)
+        # A private name, so the plug-in cannot shadow an installed module with the same file name.
+        name = f"_varda_hive_source_plugin_{path.stem}"
+        module_spec = importlib.util.spec_from_file_location(name, path)
         if module_spec is None or module_spec.loader is None:
             raise ImportError(f"cannot load source plugin from {path}")
         module = importlib.util.module_from_spec(module_spec)
-        module_spec.loader.exec_module(module)
+        # Registered before running it: dataclasses (and pickle) look the module up in sys.modules.
+        sys.modules[name] = module
+        try:
+            module_spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules[name]
+            raise
     else:
         module = importlib.import_module(target)
     cls = getattr(module, class_name)

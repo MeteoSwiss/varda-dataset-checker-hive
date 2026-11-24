@@ -47,6 +47,18 @@ def test_strict(dataset_path, capsys):
     assert "checks run" in capsys.readouterr().out
 
 
+def test_markdown_verdict_follows_exit_code(dataset_path, tmp_path, capsys):
+    """report.md must not say "passed" when the job fails under --strict or --fail-on warning."""
+    assert hive_main([str(dataset_path), "--strict", "--quiet", "--out", str(tmp_path / "strict")]) == 1
+    report = (tmp_path / "strict" / "report.md").read_text()
+    assert report.startswith("### varda-hive: failed") and "skipped" in report.split("<details>")[0]
+    capsys.readouterr()
+    assert hive_main([str(dataset_path), "--format", "markdown"]) == 0
+    assert capsys.readouterr().out.startswith("### varda-hive: passed")
+    assert hive_main([str(dataset_path), "--strict", "--format", "markdown"]) == 1
+    assert capsys.readouterr().out.startswith("### varda-hive: failed")
+
+
 def _ref(out):
     return yaml.safe_load((out / "ref.yaml").read_text())
 

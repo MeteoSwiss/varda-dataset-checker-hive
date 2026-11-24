@@ -290,6 +290,26 @@ def test_metadata_warnings(dataset_path):
             }
 
 
+def test_malformed_attributes_are_findings_not_crashes(dataset_path):
+    """A dataset fault is a precise finding, not a "check crashed" error."""
+    set_attrs(dataset_path, start_date="soon", missing_dates=["never"])
+    findings = _findings(dataset_path, Spec())
+    assert not [f for f in findings if "crashed" in f.message]
+    errors = {(f.check, f.message) for f in findings if f.severity == Severity.ERROR}
+    assert ("date_attrs_consistent", "`start_date` attribute 'soon' is not a date") in errors
+    assert ("missing_dates_valid", "`missing_dates` entry 'never' is not a date") in errors
+
+
+def test_missing_variables_attribute(dataset_path):
+    set_attrs(dataset_path, variables=None)
+    findings = run(CheckContext(Dataset(dataset_path), Spec()), bees=["meta", "stats"]).findings
+    [f] = [f for f in findings if f.check == "shape_consistent"]
+    assert f.severity == Severity.ERROR and "no `variables` attribute" in f.message
+    # checks that need the names fail with that reason, not a bare KeyError
+    crashed = [f for f in findings if "crashed" in f.message]
+    assert crashed and all("dataset has no `variables` attribute" in f.message for f in crashed)
+
+
 def test_long_list_of_findings_is_capped(tmp_path):
     path = build_dataset(tmp_path / "long.zarr", nt=15)
     set_array(path, "dates", _dates(path)[::-1].copy())

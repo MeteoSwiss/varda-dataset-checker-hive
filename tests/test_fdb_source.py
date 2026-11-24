@@ -278,6 +278,13 @@ def test_fdb_config_errors(fdb, dataset_path):
     (dataset_path / ".zattrs").write_text(json.dumps(attrs))
     [err] = [f for f in _findings(dataset_path, _spec(variables={"V_10M": {}})) if f.severity == Severity.ERROR]
     assert "no `param`" in err.message
+    # mars metadata without param: the override's request gives it; without an override, not comparable
+    attrs["variables_metadata"]["V_10M"] = {"mars": {"levtype": "sfc"}}
+    (dataset_path / ".zattrs").write_text(json.dumps(attrs))
+    findings = _findings(dataset_path, _spec(variables={"V_10M": {"request": {"param": "V_10M"}}}))
+    assert [f for f in findings if f.severity == Severity.ERROR] == []
+    assert "V_10M" in _summary(findings)["identical"]
+    assert _summary(_findings(dataset_path, _spec()))["not_comparable"]["V_10M"] == "no mars metadata"
     [err] = _findings(dataset_path, _spec(request=["class", "rd"]))
     assert "must be a mapping" in err.message
 

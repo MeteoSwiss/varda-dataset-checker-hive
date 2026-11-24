@@ -99,6 +99,9 @@ def test_stats_missing_dates_are_not_sampled(dataset_path):
         "statistics_start_date": "2020-03-01T05:00:00",
         "statistics_end_date": "2020-03-01T02:00:00"
     }, "statistics_start_date 2020-03-01T05:00:00 after"),
+    ({
+        "statistics_end_date": "yesterday"
+    }, "`statistics_end_date` attribute 'yesterday' is not a date"),
 ])
 def test_stats_statistics_window_valid(dataset_path, attrs, message):
     assert _stats_findings(dataset_path, Spec(), "statistics_window_valid") == []
