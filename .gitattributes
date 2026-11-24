@@ -1,0 +1,8 @@
+# Test data (tests/data/, written by make_varda_tiny_subset.py): never convert line endings or merge as text.
+tests/data/**/*.grib                     binary
+tests/data/**/*.db                       binary
+# zarr chunks have no extension: everything in the store is binary ...
+tests/data/varda-tiny-subset.zarr/**     binary
+# ... except the JSON metadata, kept diffable with LF endings (`binary` is -text -diff -merge, so
+# all three are set back here)
+tests/data/varda-tiny-subset.zarr/**/.z* text eol=lf diff merge
